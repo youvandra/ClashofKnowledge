@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { listAgents, listMatches, createArena, getArenaById, getArenaByCode, joinArenaByCode, startArena, setArenaReady, listArenas, deleteArena } from '../lib/api'
+import { listAgents, listMatches, createArena, getArenaById, getArenaByCode, joinArenaByCode, startArena, setArenaReady, listArenas, deleteArena, watchArena } from '../lib/api'
 
 export default function Arena() {
   const [agents, setAgents] = useState<any[]>([])
@@ -208,7 +208,11 @@ export default function Arena() {
                           if (typeof window !== 'undefined') window.location.href = `/arena/${joinArenaMeta.id}`
                         }
                       }}>Join as Player</button>
-                      <button className="btn-primary" onClick={() => {
+                      <button className="btn-primary" onClick={async () => {
+                        const acc = sessionStorage.getItem('accountId') || ''
+                        try {
+                          await watchArena(joinArenaMeta.id, acc)
+                        } catch {}
                         setModal(null)
                         if (typeof window !== 'undefined') window.location.href = `/arena/${joinArenaMeta.id}`
                       }}>Join as Watcher</button>

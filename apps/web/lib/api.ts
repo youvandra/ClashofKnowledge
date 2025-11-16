@@ -190,6 +190,15 @@ export async function challengeControl(id: string, accountId: string, action: 's
   return r.json()
 }
 
+export async function watchArena(id: string, accountId: string) {
+  const r = await fetch(`${API_URL}/arenas/watch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, accountId })
+  })
+  return r.json()
+}
+
 export async function saveArenaDraft(id: string, accountId: string, agentName?: string, content?: string) {
   const r = await fetch(`${API_URL}/arenas/save-draft`, {
     method: 'POST',

@@ -283,6 +283,22 @@ app.post('/arenas/join', async (req: Request, res: Response) => {
   }
 })
 
+app.post('/arenas/watch', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({ id: z.string(), accountId: z.string() })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
+    const a = await db.getArenaById(parsed.data.id)
+    if (!a) return res.status(404).json({ error: 'Not found' })
+    const watchers: string[] = Array.isArray(a.watcher_account_ids) ? a.watcher_account_ids : []
+    if (!watchers.includes(parsed.data.accountId)) watchers.push(parsed.data.accountId)
+    const u = await db.updateArenaById(parsed.data.id, { watcher_account_ids: watchers })
+    res.json(u)
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Server error' })
+  }
+})
+
 app.delete('/arenas/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id
