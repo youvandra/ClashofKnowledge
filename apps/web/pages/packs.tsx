@@ -64,7 +64,7 @@ export default function Packs() {
         <>
           <div className="flex items-center justify-between gap-3">
             <input className="input max-w-sm" placeholder="Search title" value={kpQuery} onChange={e=>setKpQuery(e.target.value)} />
-            <button className="btn-primary" onClick={()=> setModal({ type: 'upload' })}>Upload</button>
+            <button className="btn-primary" onClick={()=> setModal({ type: 'upload' })}>Add Knowledge</button>
           </div>
 
           <div className="card space-y-3">

@@ -7,6 +7,7 @@ export default function Home() {
   const [accountId, setAccountId] = useState('')
   const [status, setStatus] = useState('')
   const [qr, setQr] = useState('')
+  const [connecting, setConnecting] = useState(false)
   const connectingRef = useRef(false)
   useEffect(() => {
     const acc = typeof window !== 'undefined' ? sessionStorage.getItem('accountId') : null
@@ -59,7 +60,7 @@ export default function Home() {
   async function handleConnect() {
     if (connectingRef.current) return
     connectingRef.current = true
-    setStatus('Connecting wallet...')
+    setConnecting(true)
 
     let hc: any
     try {
@@ -67,6 +68,7 @@ export default function Home() {
     } catch (e: any) {
       setStatus(e?.message || 'HashConnect init error')
       connectingRef.current = false
+      setConnecting(false)
       return
     }
 
@@ -95,6 +97,7 @@ export default function Home() {
       } catch {}
 
       connectingRef.current = false
+      setConnecting(false)
     })
 
     try {
@@ -102,6 +105,7 @@ export default function Home() {
     } catch (e: any) {
       setStatus(e?.message || 'Connect error')
       connectingRef.current = false
+      setConnecting(false)
     }
   }
 
@@ -136,7 +140,17 @@ export default function Home() {
                   <Link href="/packs" className="btn-outline">Manage Packs</Link>
                 </>
               ) : (
-                <button className="btn-primary" onClick={handleConnect}>Connect Wallet</button>
+                <button className={`btn-primary ${connecting ? 'bg-gray-200 text-gray-500 hover:bg-gray-200 cursor-not-allowed' : ''}`} onClick={handleConnect} disabled={connecting}>
+                  {connecting ? (
+                    <span className="flex items-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 animate-spin">
+                        <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                        <path d="M12 2a10 10 0 0 1 10 10" />
+                      </svg>
+                      <span>Connecting...</span>
+                    </span>
+                  ) : 'Connect Wallet'}
+                </button>
               )}
             </div>
             {status && !connected && <div className="text-sm">{status}</div>}

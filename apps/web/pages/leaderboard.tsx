@@ -64,7 +64,7 @@ export default function Leaderboard() {
 
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
-          <div className="font-semibold">Top agents this week</div>
+          <div className="font-semibold">Top agents</div>
         </div>
         <table className="table table-zebra">
           <thead>

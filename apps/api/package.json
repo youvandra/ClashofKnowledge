@@ -1,5 +1,5 @@
 {
-  "name": "debate-arena-api",
+  "name": "mindclash-api",
   "version": "0.1.0",
   "main": "dist/index.js",
   "scripts": {
