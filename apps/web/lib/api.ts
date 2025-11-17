@@ -1,15 +1,16 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'
 
-export async function listKnowledgePacks() {
-  const r = await fetch(`${API_URL}/knowledge-packs`)
+export async function listKnowledgePacks(accountId?: string) {
+  const url = accountId ? `${API_URL}/knowledge-packs?accountId=${encodeURIComponent(accountId)}` : `${API_URL}/knowledge-packs`
+  const r = await fetch(url)
   return r.json()
 }
 
-export async function createKnowledgePack(title: string, content: string) {
+export async function createKnowledgePack(title: string, content: string, ownerAccountId?: string) {
   const r = await fetch(`${API_URL}/knowledge-packs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, content })
+    body: JSON.stringify({ title, content, ownerAccountId })
   })
   return r.json()
 }
@@ -32,8 +33,9 @@ export async function deleteKnowledgePack(id: string) {
   return data
 }
 
-export async function listAgents() {
-  const r = await fetch(`${API_URL}/agents`)
+export async function listAgents(ownerAccountId?: string) {
+  const url = ownerAccountId ? `${API_URL}/agents?ownerAccountId=${encodeURIComponent(ownerAccountId)}` : `${API_URL}/agents`
+  const r = await fetch(url)
   return r.json()
 }
 

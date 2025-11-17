@@ -29,7 +29,7 @@ export default function Arena() {
       window.location.href = '/'
       return
     }
-    listAgents().then(setAgents)
+    listAgents(acc || undefined).then(setAgents)
     listMatches().then(setRecent)
     listArenas(acc || undefined).then(setMyArenas)
     if (acc) {

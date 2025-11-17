@@ -29,8 +29,9 @@ export default function ArenaRoom() {
 
   useEffect(() => {
     if (!id) return
-    listAgents().then(setAgents)
-    listKnowledgePacks().then(setPacks).catch(()=>{})
+    const acc = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
+    listAgents(acc || undefined).then(setAgents)
+    listKnowledgePacks(acc || undefined).then(setPacks).catch(()=>{})
     ;(async () => {
       try {
         const a = await getArenaById(id)

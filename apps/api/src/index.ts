@@ -18,15 +18,16 @@ app.get('/health', (req: Request, res: Response) => {
 })
 
 app.post('/knowledge-packs', async (req: Request, res: Response) => {
-  const schema = z.object({ title: z.string(), content: z.string() })
+  const schema = z.object({ title: z.string(), content: z.string(), ownerAccountId: z.string().optional() })
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
-  const kp = await db.createKnowledgePack(parsed.data.title, parsed.data.content)
+  const kp = await db.createKnowledgePack(parsed.data.title, parsed.data.content, parsed.data.ownerAccountId)
   res.json(kp)
 })
 
 app.get('/knowledge-packs', async (req: Request, res: Response) => {
-  const list = await db.listKnowledgePacks()
+  const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined
+  const list = await db.listKnowledgePacks(accountId)
   res.json(list)
 })
 
@@ -74,8 +75,14 @@ app.post('/agents', async (req: Request, res: Response) => {
 })
 
 app.get('/agents', async (req: Request, res: Response) => {
+  const ownerAccountId = typeof req.query.ownerAccountId === 'string' ? req.query.ownerAccountId : undefined
+  if (!ownerAccountId) {
+    const list = await db.listAgents()
+    return res.json(list)
+  }
   const list = await db.listAgents()
-  res.json(list)
+  const filtered = (list || []).filter(a => String(a.ownerAccountId || '') === ownerAccountId)
+  res.json(filtered)
 })
 
 app.put('/agents/:id', async (req: Request, res: Response) => {

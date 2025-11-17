@@ -33,9 +33,11 @@ function id() {
 }
 
 export const db = {
-  createKnowledgePack: async (title: string, content: string): Promise<KnowledgePack> => {
+  createKnowledgePack: async (title: string, content: string, ownerAccountId?: string): Promise<KnowledgePack> => {
     if (supabase) {
-      const { data, error } = await supabase.from('knowledge_packs').insert({ title, content }).select().single()
+      const payload: any = { title, content }
+      if (ownerAccountId) payload.owner_account_id = ownerAccountId
+      const { data, error } = await supabase.from('knowledge_packs').insert(payload).select().single()
       if (error) throw error
       return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime() }
     }
@@ -51,11 +53,33 @@ export const db = {
     }
     return memory.knowledge.get(kpId)
   },
-  listKnowledgePacks: async (): Promise<KnowledgePack[]> => {
+  listKnowledgePacks: async (accountId?: string): Promise<KnowledgePack[]> => {
     if (supabase) {
-      const { data, error } = await supabase.from('knowledge_packs').select('*').order('created_at', { ascending: false })
-      if (error) throw error
-      return data.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime() }))
+      if (accountId) {
+        const { data: agents } = await supabase.from('agents').select('id').eq('owner_account_id', accountId)
+        const agentIds = (agents || []).map((a: any) => a.id)
+        let kpIds: string[] = []
+        if (agentIds.length > 0) {
+          const { data: joins } = await supabase.from('agent_knowledge_packs').select('knowledge_pack_id').in('agent_id', agentIds)
+          kpIds = (joins || []).map((j: any) => j.knowledge_pack_id)
+        }
+        const uniqIds = Array.from(new Set(kpIds))
+        const packs: any[] = []
+        if (uniqIds.length > 0) {
+          const { data: byJoin } = await supabase.from('knowledge_packs').select('*').in('id', uniqIds)
+          ;(byJoin || []).forEach(d => packs.push(d))
+        }
+        const { data: owned } = await supabase.from('knowledge_packs').select('*').eq('owner_account_id', accountId)
+        ;(owned || []).forEach(d => packs.push(d))
+        const uniq = new Map<string, any>()
+        for (const p of packs) uniq.set(p.id, p)
+        const list = Array.from(uniq.values()).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        return list.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime() }))
+      } else {
+        const { data, error } = await supabase.from('knowledge_packs').select('*').order('created_at', { ascending: false })
+        if (error) throw error
+        return data.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime() }))
+      }
     }
     return [...memory.knowledge.values()]
   },

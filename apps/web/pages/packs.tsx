@@ -36,14 +36,14 @@ export default function Packs() {
   useEffect(() => {
     const acc = typeof window !== 'undefined' ? sessionStorage.getItem('accountId') : null
     if (!acc) { window.location.href = '/'; return }
-    refresh()
+    refresh(String(acc))
   }, [])
 
-  async function refresh() {
+  async function refresh(accId: string) {
     try {
-      const ps = await listKnowledgePacks()
+      const ps = await listKnowledgePacks(accId)
       setPacks(ps)
-      const as = await listAgents()
+      const as = await listAgents(accId)
       setAgents(as)
     } catch (e: any) {
       setStatus(e?.message || 'Load failed')
@@ -115,7 +115,6 @@ export default function Packs() {
                           <div className="font-semibold">No knowledge found</div>
                           <div className="text-sm text-brand-brown/60">Try adjusting search or upload new knowledge.</div>
                         </div>
-                        <button className="btn-primary" onClick={()=> setModal({ type: 'upload' })}>Upload</button>
                       </div>
                     </td>
                   </tr>
@@ -187,7 +186,6 @@ export default function Packs() {
                           <div className="font-semibold">No agents found</div>
                           <div className="text-sm text-brand-brown/60">Try adjusting search or create a new agent.</div>
                         </div>
-                        <button className="btn-secondary" onClick={()=> setModal({ type: 'createAgent' })}>Create Agent</button>
                       </div>
                     </td>
                   </tr>
@@ -227,7 +225,8 @@ export default function Packs() {
                   <button className="btn-outline" onClick={()=> setModal(null)}>Cancel</button>
                   <button className="btn-primary" disabled={!kpTitle || !kpContent} onClick={async ()=>{
                     try {
-                      const kp = await createKnowledgePack(kpTitle, kpContent)
+                      const acc = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
+                      const kp = await createKnowledgePack(kpTitle, kpContent, acc)
                       setPacks(prev => [kp, ...prev])
                       setKpTitle('')
                       setKpContent('')
