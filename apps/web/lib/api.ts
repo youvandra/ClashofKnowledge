@@ -11,11 +11,11 @@ export async function listMarketplaceListings() {
   return r.json()
 }
 
-export async function createMarketplaceListing(knowledgePackId: string, ownerAccountId: string, price: number) {
+export async function createMarketplaceListing(knowledgePackId: string, ownerAccountId: string, price: number, pricePerUse: number) {
   const r = await fetch(`${API_URL}/marketplace/listings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ knowledgePackId, ownerAccountId, price })
+    body: JSON.stringify({ knowledgePackId, ownerAccountId, price, pricePerUse })
   })
   const data = await r.json()
   if (!r.ok || data.error) throw new Error(data.error || 'Create listing failed')
@@ -65,11 +65,11 @@ export async function rentMarketplace(listingId: string, renterAccountId: string
   return r.json()
 }
 
-export async function updateMarketplaceListingPrice(knowledgePackId: string, ownerAccountId: string, price: number) {
-  const r = await fetch(`${API_URL}/marketplace/listings/update-price`, {
+export async function updateMarketplaceListing(knowledgePackId: string, ownerAccountId: string, price: number, pricePerUse: number) {
+  const r = await fetch(`${API_URL}/marketplace/listings/update`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ knowledgePackId, ownerAccountId, price })
+    body: JSON.stringify({ knowledgePackId, ownerAccountId, price, pricePerUse })
   })
   return r.json()
 }

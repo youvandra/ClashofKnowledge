@@ -10,6 +10,7 @@ export default function Playground() {
   const [selOwned, setSelOwned] = useState<string[]>([])
   const [selRented, setSelRented] = useState<string[]>([])
   const [selTitles, setSelTitles] = useState<{ type: 'owned'|'rented', id: string, title: string }[]>([])
+  const [listingMeta, setListingMeta] = useState<Record<string, { pricePerUse: number, ownerId: string }>>({})
   const [messages, setMessages] = useState<{ role: 'user'|'assistant', content: string }[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -78,6 +79,7 @@ export default function Playground() {
               setSelRented(ids => ids.includes(lid) ? ids : [...ids, lid])
               const t = item.title || String(l?.title || l?.knowledge_pack_id || 'Untitled Knowledge')
               setSelTitles(ts => ts.some(x => x.type==='rented' && x.id===lid) ? ts : [...ts, { type: 'rented', id: lid, title: t }])
+              setListingMeta(m => ({ ...m, [lid]: { pricePerUse: Math.max(0, Number(l?.price_per_use || 0)), ownerId: String(l?.owner_account_id || '') } }))
             } catch {}
           }
         })()
@@ -125,6 +127,17 @@ export default function Playground() {
     const more = selTitles.length > 3 ? ` +${selTitles.length - 3}` : ''
     return `Chat with ${names}${more}`
   }, [selTitles])
+
+  const userMessageCount = useMemo(() => messages.filter(m => m.role === 'user').length, [messages])
+  const perChatCost = useMemo(() => {
+    return selRented.reduce((sum, id) => {
+      const meta = listingMeta[id]
+      if (!meta) return sum
+      if (meta.ownerId === accountId) return sum
+      return sum + Math.max(0, meta.pricePerUse || 0)
+    }, 0)
+  }, [selRented, listingMeta, accountId])
+  const totalCost = useMemo(() => perChatCost * userMessageCount, [perChatCost, userMessageCount])
 
   async function send() {
     if ((!selOwned.length && !selRented.length) || !input) return
@@ -182,6 +195,7 @@ export default function Playground() {
                   <button className={`btn-primary btn-sm ${selRented.includes(l.id)?'bg-gray-200 text-gray-500 cursor-not-allowed':''}`} disabled={selRented.includes(l.id)} onClick={()=>{
                     setSelRented(ids => ids.includes(l.id) ? ids : [...ids, l.id])
                     setSelTitles(ts => ts.some(x => x.type==='rented' && x.id===l.id) ? ts : [...ts, { type: 'rented', id: l.id, title: l.title || 'Untitled Knowledge' }])
+                    setListingMeta(m => ({ ...m, [l.id]: { pricePerUse: Math.max(0, Number(l?.price_per_use || 0)), ownerId: String(l?.owner_account_id || '') } }))
                   }}>Add</button>
                 </div>
               ))}
@@ -195,7 +209,7 @@ export default function Playground() {
           <div className="flex flex-wrap gap-2">
             {selTitles.slice(0,3).map(s => (
               <span key={`${s.type}-${s.id}`} className="badge inline-flex items-center gap-2">
-                <span className="truncate max-w-[12rem]" title={s.title}>{s.title}</span>
+                <span className="truncate max-w-[4rem]" title={s.title}>{s.title}</span>
                 <button className="btn-ghost btn-compact btn-sm" onClick={()=>{
                   if (s.type==='owned') setSelOwned(ids => ids.filter(id => id !== s.id))
                   else setSelRented(ids => ids.filter(id => id !== s.id))
@@ -207,7 +221,8 @@ export default function Playground() {
               <span className="badge">{selTitles.length - 3}+ more</span>
             )}
           </div>
-          <div>
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-brand-brown/70">Per chat: {perChatCost} • Total: {totalCost}</div>
             <button className="btn-outline btn-sm" onClick={()=>{ setSelOwned([]); setSelRented([]); setSelTitles([]); setMessages([]) }}>Clear</button>
           </div>
         </div>
