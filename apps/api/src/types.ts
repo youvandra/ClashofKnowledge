@@ -6,6 +6,7 @@ export type KnowledgePack = {
   content: string
   createdAt: number
   ownerAccountId?: string
+  listed?: boolean
 }
 
 export type Agent = {

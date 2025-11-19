@@ -90,6 +90,9 @@ export default function Packs() {
                           {String(p.title || '').toLowerCase().startsWith('cons') && (
                             <span className="badge badge-muted">Cons</span>
                           )}
+                          {p.listed && (
+                            <span className="badge bg-blue-100 text-blue-800">Listed</span>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -106,10 +109,11 @@ export default function Packs() {
                           const acc = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
                           const isOwner = String(p.ownerAccountId || '') === acc
                           return isOwner ? (
-                            <button className="btn-outline btn-sm btn-compact" onClick={async ()=>{
+                            <button className={`btn-outline btn-sm btn-compact ${p.listed ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''}`} disabled={p.listed} onClick={async ()=>{
                               try {
                                 const accId = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
                                 await createMarketplaceListing(p.id, accId)
+                                setPacks(prev => prev.map(x => x.id === p.id ? { ...x, listed: true } : x))
                                 pushToast('success','Listed for rent in marketplace')
                               } catch (e: any) { pushToast('error', e?.message || 'Listing failed') }
                             }}>Rent</button>

@@ -39,7 +39,7 @@ export const db = {
       if (ownerAccountId) payload.owner_account_id = ownerAccountId
       const { data, error } = await supabase.from('knowledge_packs').insert(payload).select().single()
       if (error) throw error
-      return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime(), ownerAccountId: data.owner_account_id || undefined }
+      return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime(), ownerAccountId: data.owner_account_id || undefined, listed: !!data.listed }
     }
     const kp: KnowledgePack = { id: id(), title, content, createdAt: Date.now() }
     memory.knowledge.set(kp.id, kp)
@@ -49,7 +49,7 @@ export const db = {
     if (supabase) {
       const { data, error } = await supabase.from('knowledge_packs').select('*').eq('id', kpId).single()
       if (error) return undefined
-      return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime(), ownerAccountId: data.owner_account_id || undefined }
+      return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime(), ownerAccountId: data.owner_account_id || undefined, listed: !!data.listed }
     }
     return memory.knowledge.get(kpId)
   },
@@ -74,11 +74,11 @@ export const db = {
         const uniq = new Map<string, any>()
         for (const p of packs) uniq.set(p.id, p)
         const list = Array.from(uniq.values()).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        return list.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime(), ownerAccountId: d.owner_account_id || undefined }))
+        return list.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime(), ownerAccountId: d.owner_account_id || undefined, listed: !!d.listed }))
       } else {
         const { data, error } = await supabase.from('knowledge_packs').select('*').order('created_at', { ascending: false })
         if (error) throw error
-        return data.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime(), ownerAccountId: d.owner_account_id || undefined }))
+        return data.map((d: any) => ({ id: d.id, title: d.title, content: d.content, createdAt: new Date(d.created_at).getTime(), ownerAccountId: d.owner_account_id || undefined, listed: !!d.listed }))
       }
     }
     return [...memory.knowledge.values()]
@@ -87,7 +87,7 @@ export const db = {
     if (supabase) {
       const { data, error } = await supabase.from('knowledge_packs').update(values as any).eq('id', kpId).select().single()
       if (error) return undefined
-      return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime(), ownerAccountId: data.owner_account_id || undefined }
+      return { id: data.id, title: data.title, content: data.content, createdAt: new Date(data.created_at).getTime(), ownerAccountId: data.owner_account_id || undefined, listed: !!data.listed }
     }
     const existing = memory.knowledge.get(kpId)
     if (!existing) return undefined
@@ -315,8 +315,11 @@ export const db = {
   }
   , createMarketplaceListing: async (knowledgePackId: string, ownerAccountId: string): Promise<any> => {
     if (supabase) {
+      const { data: existing } = await supabase.from('marketplace_listings').select('id').eq('knowledge_pack_id', knowledgePackId).maybeSingle()
+      if (existing) throw new Error('Already listed')
       const { data, error } = await supabase.from('marketplace_listings').insert({ knowledge_pack_id: knowledgePackId, owner_account_id: ownerAccountId, status: 'active' }).select('*').single()
       if (error) throw error
+      await supabase.from('knowledge_packs').update({ listed: true }).eq('id', knowledgePackId)
       return data
     }
     const listing = { id: id(), knowledge_pack_id: knowledgePackId, owner_account_id: ownerAccountId, status: 'active', created_at: new Date().toISOString() }
