@@ -266,12 +266,12 @@ app.get('/marketplace/listings', async (req: Request, res: Response) => {
 
 app.post('/marketplace/listings', async (req: Request, res: Response) => {
   try {
-    const schema = z.object({ knowledgePackId: z.string(), ownerAccountId: z.string() })
+    const schema = z.object({ knowledgePackId: z.string(), ownerAccountId: z.string(), price: z.number().int().nonnegative() })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
     const kp = await db.getKnowledgePack(parsed.data.knowledgePackId)
     if (!kp) return res.status(404).json({ error: 'Knowledge not found' })
-    const listing = await db.createMarketplaceListing(parsed.data.knowledgePackId, parsed.data.ownerAccountId)
+    const listing = await db.createMarketplaceListing(parsed.data.knowledgePackId, parsed.data.ownerAccountId, parsed.data.price)
     res.json(listing)
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Server error' })
@@ -282,6 +282,21 @@ app.get('/marketplace/listings/:id', async (req: Request, res: Response) => {
   const row = await db.getMarketplaceListing(req.params.id)
   if (!row) return res.status(404).json({ error: 'Not found' })
   res.json(row)
+})
+
+app.post('/marketplace/unlist', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({ knowledgePackId: z.string(), ownerAccountId: z.string() })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
+    const listing = await db.getMarketplaceListingByPackId(parsed.data.knowledgePackId)
+    if (!listing) return res.status(404).json({ error: 'Listing not found' })
+    if (String(listing.owner_account_id) !== String(parsed.data.ownerAccountId)) return res.status(403).json({ error: 'Forbidden' })
+    const ok = await db.unlistMarketplaceListing(parsed.data.knowledgePackId)
+    res.json({ ok })
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Server error' })
+  }
 })
 
 app.get('/marketplace/rental-status', async (req: Request, res: Response) => {

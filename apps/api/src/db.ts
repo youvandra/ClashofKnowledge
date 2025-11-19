@@ -320,29 +320,29 @@ export const db = {
     }
     return existed
   }
-  , createMarketplaceListing: async (knowledgePackId: string, ownerAccountId: string): Promise<any> => {
+  , createMarketplaceListing: async (knowledgePackId: string, ownerAccountId: string, price: number): Promise<any> => {
     if (supabase) {
       const { data: existing } = await supabase.from('marketplace_listings').select('id').eq('knowledge_pack_id', knowledgePackId).maybeSingle()
       if (existing) throw new Error('Already listed')
-      const { data, error } = await supabase.from('marketplace_listings').insert({ knowledge_pack_id: knowledgePackId, owner_account_id: ownerAccountId, status: 'active' }).select('*').single()
+      const { data, error } = await supabase.from('marketplace_listings').insert({ knowledge_pack_id: knowledgePackId, owner_account_id: ownerAccountId, status: 'active', price }).select('*').single()
       if (error) throw error
       await supabase.from('knowledge_packs').update({ listed: true }).eq('id', knowledgePackId)
       return data
     }
-    const listing = { id: id(), knowledge_pack_id: knowledgePackId, owner_account_id: ownerAccountId, status: 'active', created_at: new Date().toISOString() }
+    const listing = { id: id(), knowledge_pack_id: knowledgePackId, owner_account_id: ownerAccountId, status: 'active', price, created_at: new Date().toISOString() }
     return listing
   }
   , listMarketplaceListings: async (): Promise<any[]> => {
     if (supabase) {
       const { data, error } = await supabase
         .from('marketplace_listings')
-        .select('id, knowledge_pack_id, owner_account_id, status, created_at, knowledge_packs(title)')
+        .select('id, knowledge_pack_id, owner_account_id, status, created_at, price, knowledge_packs(title)')
         .order('created_at', { ascending: false })
       if (error) throw error
       return (data || []).map((d: any) => {
         const kpRel = (d as any).knowledge_packs
         const kpTitle = Array.isArray(kpRel) ? (kpRel[0]?.title) : (kpRel?.title)
-        return { id: d.id, knowledge_pack_id: d.knowledge_pack_id, owner_account_id: d.owner_account_id, status: d.status, created_at: d.created_at, title: kpTitle || undefined }
+        return { id: d.id, knowledge_pack_id: d.knowledge_pack_id, owner_account_id: d.owner_account_id, status: d.status, created_at: d.created_at, price: d.price, title: kpTitle || undefined }
       })
     }
     return []
@@ -351,15 +351,41 @@ export const db = {
     if (supabase) {
       const { data } = await supabase
         .from('marketplace_listings')
-        .select('id, knowledge_pack_id, owner_account_id, status, created_at, knowledge_packs(title)')
+        .select('id, knowledge_pack_id, owner_account_id, status, created_at, price, knowledge_packs(title)')
         .eq('id', idStr)
         .maybeSingle()
       if (!data) return undefined
       const kpRel = (data as any).knowledge_packs
       const kpTitle = Array.isArray(kpRel) ? (kpRel[0]?.title) : (kpRel?.title)
-      return { id: data.id, knowledge_pack_id: data.knowledge_pack_id, owner_account_id: data.owner_account_id, status: data.status, created_at: data.created_at, title: kpTitle || undefined }
+      return { id: data.id, knowledge_pack_id: data.knowledge_pack_id, owner_account_id: data.owner_account_id, status: data.status, created_at: data.created_at, price: (data as any).price, title: kpTitle || undefined }
     }
     return undefined
+  }
+  , getMarketplaceListingByPackId: async (knowledgePackId: string): Promise<any | undefined> => {
+    if (supabase) {
+      const { data } = await supabase
+        .from('marketplace_listings')
+        .select('id, knowledge_pack_id, owner_account_id, status, created_at, price')
+        .eq('knowledge_pack_id', knowledgePackId)
+        .order('created_at', { ascending: false })
+        .maybeSingle()
+      if (!data) return undefined
+      return data
+    }
+    return undefined
+  }
+  , unlistMarketplaceListing: async (knowledgePackId: string): Promise<boolean> => {
+    if (supabase) {
+      const { data } = await supabase.from('marketplace_listings').select('id').eq('knowledge_pack_id', knowledgePackId)
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          await supabase.from('marketplace_listings').delete().eq('id', row.id)
+        }
+      }
+      await supabase.from('knowledge_packs').update({ listed: false }).eq('id', knowledgePackId)
+      return true
+    }
+    return true
   }
   , createMarketplaceRental: async (listingId: string, renterAccountId: string, minutes: number): Promise<any> => {
     const mins = Math.max(1, Math.floor(minutes))

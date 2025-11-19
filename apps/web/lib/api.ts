@@ -11,15 +11,24 @@ export async function listMarketplaceListings() {
   return r.json()
 }
 
-export async function createMarketplaceListing(knowledgePackId: string, ownerAccountId: string) {
+export async function createMarketplaceListing(knowledgePackId: string, ownerAccountId: string, price: number) {
   const r = await fetch(`${API_URL}/marketplace/listings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ knowledgePackId, ownerAccountId })
+    body: JSON.stringify({ knowledgePackId, ownerAccountId, price })
   })
   const data = await r.json()
   if (!r.ok || data.error) throw new Error(data.error || 'Create listing failed')
   return data
+}
+
+export async function unlistMarketplaceListing(knowledgePackId: string, ownerAccountId: string) {
+  const r = await fetch(`${API_URL}/marketplace/unlist`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ knowledgePackId, ownerAccountId })
+  })
+  return r.json()
 }
 
 export async function chatMarketplace(listingId: string, accountId: string, messages: { role: 'user'|'assistant', content: string }[]) {

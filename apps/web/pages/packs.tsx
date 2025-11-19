@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listKnowledgePacks, createKnowledgePack, updateKnowledgePack, listAgents, createAgent, updateAgent, addAgentKnowledge, removeAgentKnowledge, createMarketplaceListing } from '../lib/api'
+import { listKnowledgePacks, createKnowledgePack, updateKnowledgePack, listAgents, createAgent, updateAgent, addAgentKnowledge, removeAgentKnowledge, createMarketplaceListing, unlistMarketplaceListing } from '../lib/api'
 
 export default function Packs() {
   const [kpTitle, setKpTitle] = useState('')
@@ -25,6 +25,7 @@ export default function Packs() {
   const [agentPage, setAgentPage] = useState(1)
   const [agentSize, setAgentSize] = useState(10)
   const [modal, setModal] = useState<{ type: string, id?: string } | null>(null)
+  const [listPrice, setListPrice] = useState<string>('')
   const [toasts, setToasts] = useState<{ id: string, kind: 'success'|'error', text: string }[]>([])
 
   function pushToast(kind: 'success'|'error', text: string) {
@@ -90,9 +91,6 @@ export default function Packs() {
                           {String(p.title || '').toLowerCase().startsWith('cons') && (
                             <span className="badge badge-muted">Cons</span>
                           )}
-                          {p.listed && (
-                            <span className="badge bg-blue-100 text-blue-800">Listed</span>
-                          )}
                         </div>
                       </div>
                     </td>
@@ -109,14 +107,22 @@ export default function Packs() {
                           const acc = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
                           const isOwner = String(p.ownerAccountId || '') === acc
                           return isOwner ? (
-                            <button className={`btn-outline btn-sm btn-compact ${p.listed ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''}`} disabled={p.listed} onClick={async ()=>{
-                              try {
-                                const accId = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
-                                await createMarketplaceListing(p.id, accId)
-                                setPacks(prev => prev.map(x => x.id === p.id ? { ...x, listed: true } : x))
-                                pushToast('success','Listed for rent in marketplace')
-                              } catch (e: any) { pushToast('error', e?.message || 'Listing failed') }
-                            }}>Rent</button>
+                            p.listed ? (
+                              <button className="btn-outline btn-sm btn-compact" onClick={async ()=>{
+                                try {
+                                  const accId = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
+                                  const r = await unlistMarketplaceListing(p.id, accId)
+                                  if (r && !r.error) {
+                                    setPacks(prev => prev.map(x => x.id === p.id ? { ...x, listed: false } : x))
+                                    pushToast('success','Unlisted from marketplace')
+                                  } else {
+                                    pushToast('error', r?.error || 'Unlist failed')
+                                  }
+                                } catch (e: any) { pushToast('error', e?.message || 'Unlist failed') }
+                              }}>Unrent</button>
+                            ) : (
+                              <button className="btn-primary btn-sm btn-compact" onClick={()=>{ setModal({ type: 'listPack', id: p.id }); setListPrice('0') }}>Rent</button>
+                            )
                           ) : null
                         })()}
                       </div>
@@ -283,7 +289,31 @@ export default function Packs() {
                 </div>
               </div>
             )}
-            {false}
+            {modal?.type === 'listPack' && modal.id && (
+              <div className="space-y-3">
+                <div className="font-semibold">List for Rent</div>
+                <label className="text-sm">Rent Price</label>
+                <input className="input" type="number" min={0} value={listPrice} onChange={e=> setListPrice(e.target.value)} />
+                <div className="flex gap-2 justify-end">
+                  <button className="btn-outline" onClick={()=> { setModal(null); setListPrice('') }}>Cancel</button>
+                  <button className="btn-primary" onClick={async ()=>{
+                    try {
+                      const accId = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
+                      const priceNum = Math.max(0, parseInt(listPrice || '0', 10))
+                      const r = await createMarketplaceListing(String(modal.id), accId, priceNum)
+                      if (r && !r.error) {
+                        setPacks(prev => prev.map(x => x.id === modal.id ? { ...x, listed: true } : x))
+                        setModal(null)
+                        setListPrice('')
+                        pushToast('success','Listed for rent')
+                      } else {
+                        pushToast('error', r?.error || 'Listing failed')
+                      }
+                    } catch (e: any) { pushToast('error', e?.message || 'Listing failed') }
+                  }}>List</button>
+                </div>
+              </div>
+            )}
             {modal.type === 'createAgent' && (
               <div className="space-y-3">
                 <div className="font-semibold">Create Agent</div>
