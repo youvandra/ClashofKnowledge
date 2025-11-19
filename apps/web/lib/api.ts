@@ -31,6 +31,11 @@ export async function chatMarketplace(listingId: string, messages: { role: 'user
   return r.json()
 }
 
+export async function getMarketplaceListing(id: string) {
+  const r = await fetch(`${API_URL}/marketplace/listings/${encodeURIComponent(id)}`)
+  return r.json()
+}
+
 export async function createKnowledgePack(title: string, content: string, ownerAccountId?: string) {
   const r = await fetch(`${API_URL}/knowledge-packs`, {
     method: 'POST',

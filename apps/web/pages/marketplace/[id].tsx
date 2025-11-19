@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { chatMarketplace } from '../../lib/api'
+import { chatMarketplace, getMarketplaceListing } from '../../lib/api'
 
 export default function MarketplaceChat() {
   const [listingId, setListingId] = useState<string>('')
   const [messages, setMessages] = useState<{ role: 'user'|'assistant', content: string }[]>([])
+  const [title, setTitle] = useState<string>('')
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const mounted = useRef(false)
@@ -13,6 +14,7 @@ export default function MarketplaceChat() {
     const parts = typeof window !== 'undefined' ? window.location.pathname.split('/') : []
     const id = parts[parts.length - 1]
     setListingId(id)
+    getMarketplaceListing(id).then(l => { setTitle(String(l?.title || '')) }).catch(()=>{})
   }, [])
 
   async function send() {
@@ -31,7 +33,7 @@ export default function MarketplaceChat() {
 
   return (
     <div className="page py-8 space-y-6">
-      <h2 className="text-2xl font-bold">Chat</h2>
+      <h2 className="text-2xl font-bold">{title ? `Chat with ${title}` : 'Chat'}</h2>
       <div className="card p-4 space-y-3">
         <div className="space-y-3 max-h-[60vh] overflow-y-auto">
           {messages.map((m, idx) => (

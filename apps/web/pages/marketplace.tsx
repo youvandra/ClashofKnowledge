@@ -18,9 +18,8 @@ export default function Marketplace() {
           <div key={l.id} className="card p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm text-brand-brown/60">Owner <span className="font-mono">{l.owner_account_id}</span></div>
-                <div className="font-semibold">Knowledge Pack <span className="font-mono">{l.knowledge_pack_id}</span></div>
-                <div className="text-xs text-brand-brown/60">{new Date(l.created_at).toLocaleString()}</div>
+                <div className="text-lg font-semibold" title={l.title || l.knowledge_pack_id}>{l.title || 'Untitled Knowledge'}</div>
+                <div className="text-xs text-brand-brown/60">Owner <span className="font-mono">{l.owner_account_id}</span> • {new Date(l.created_at).toLocaleString()}</div>
               </div>
               <a className="btn-primary" href={`/marketplace/${l.id}`}>Chat</a>
             </div>
@@ -33,4 +32,3 @@ export default function Marketplace() {
     </div>
   )
 }
-
