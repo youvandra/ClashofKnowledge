@@ -78,35 +78,35 @@ export default function Playground() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="card p-3 flex flex-col gap-2">
-          <div className="text-base font-semibold">My Knowledge</div>
+        <div className="card p-4 flex flex-col gap-3">
+          <div className="text-lg font-semibold">My Knowledge</div>
           {loadingOwned ? (
             <div className="text-sm text-brand-brown/60">Loading…</div>
           ) : owned.length === 0 ? (
             <div className="text-sm text-brand-brown/60">No knowledge packs yet</div>
           ) : (
-            <div className="space-y-1 max-h-[14rem] overflow-y-auto">
+            <div className="space-y-2 max-h-[12rem] overflow-y-auto">
               {owned.map((k: any) => (
-                <div key={k.id} className="flex items-center justify-between gap-2 text-sm">
+                <div key={k.id} className="flex items-center justify-between gap-2">
                   <div className="truncate" title={k.title}>{k.title || 'Untitled Knowledge'}</div>
-                  <button className="btn-primary btn-compact" onClick={()=>{ setSel({ kind: 'owned', id: k.id, title: k.title || 'Untitled Knowledge' }); setMessages([]) }}>Chat</button>
+                  <button className="btn-primary btn-sm" onClick={()=>{ setSel({ kind: 'owned', id: k.id, title: k.title || 'Untitled Knowledge' }); setMessages([]) }}>Chat</button>
                 </div>
               ))}
             </div>
           )}
         </div>
-        <div className="card p-3 flex flex-col gap-2">
-          <div className="text-base font-semibold">Rented Knowledge</div>
+        <div className="card p-4 flex flex-col gap-3">
+          <div className="text-lg font-semibold">Rented Knowledge</div>
           {loadingRented ? (
             <div className="text-sm text-brand-brown/60">Loading…</div>
           ) : rented.length === 0 ? (
             <div className="text-sm text-brand-brown/60">No active rentals</div>
           ) : (
-            <div className="space-y-1 max-h-[14rem] overflow-y-auto">
+            <div className="space-y-2 max-h-[12rem] overflow-y-auto">
               {rented.map((l: any) => (
-                <div key={l.id} className="flex items-center justify-between gap-2 text-sm">
+                <div key={l.id} className="flex items-center justify-between gap-2">
                   <div className="truncate" title={l.title || l.knowledge_pack_id}>{l.title || 'Untitled Knowledge'}</div>
-                  <button className="btn-primary btn-compact" onClick={()=>{ setSel({ kind: 'rented', id: l.id, title: l.title || 'Untitled Knowledge' }); setMessages([]) }}>Chat</button>
+                  <button className="btn-primary btn-sm" onClick={()=>{ setSel({ kind: 'rented', id: l.id, title: l.title || 'Untitled Knowledge' }); setMessages([]) }}>Chat</button>
                 </div>
               ))}
             </div>
