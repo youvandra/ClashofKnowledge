@@ -600,6 +600,14 @@ export const db = {
     }
     return undefined
   }
+  , getCustodialWalletByAccountId: async (accountId: string): Promise<any | undefined> => {
+    if (supabase) {
+      const { data } = await supabase.from('custodial_wallets').select('*').eq('account_id', accountId).maybeSingle()
+      if (!data) return undefined
+      return data
+    }
+    return undefined
+  }
   , upsertCustodialWallet: async (payload: { user_id: string; email?: string; provider?: string; account_id: string; private_key?: string; public_key?: string }): Promise<any | undefined> => {
     if (supabase) {
       const { data: existing } = await supabase.from('custodial_wallets').select('id').eq('user_id', payload.user_id).maybeSingle()
@@ -623,6 +631,33 @@ export const db = {
         if (owner) countsMap.set(owner, (countsMap.get(owner) || 0) + 1)
       }
       return (users || []).map((u: any) => ({ accountId: u.account_id, name: u.name, elo: u.elo_rating || 1000, agentCount: countsMap.get(u.account_id) || 0 }))
+    }
+    return []
+  }
+  , createActivityChat: async (payload: { account_id: string; question: string; answer: string; owned_ids: string[]; listing_ids: string[]; charges: Record<string, number>; total_amount: number; transaction_ids: string[]; network?: string }): Promise<any | undefined> => {
+    if (supabase) {
+      const { data, error } = await supabase.from('activities').insert({
+        account_id: payload.account_id,
+        type: 'chat',
+        question: payload.question,
+        answer: payload.answer,
+        owned_ids: payload.owned_ids,
+        listing_ids: payload.listing_ids,
+        charges: payload.charges,
+        total_amount: payload.total_amount,
+        transaction_ids: payload.transaction_ids,
+        network: payload.network || null
+      }).select('*').maybeSingle()
+      if (error) return undefined
+      return data || undefined
+    }
+    return undefined
+  }
+  , listActivitiesByAccountId: async (accountId: string): Promise<any[]> => {
+    if (supabase) {
+      const { data, error } = await supabase.from('activities').select('*').eq('account_id', accountId).order('created_at', { ascending: false })
+      if (error) throw error
+      return data || []
     }
     return []
   }

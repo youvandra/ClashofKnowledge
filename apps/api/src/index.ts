@@ -132,26 +132,16 @@ app.post('/custodial/ensure', async (req: Request, res: Response) => {
     const treasuryKeyStr = process.env.COK_TREASURY_PRIVATE_KEY
     if (!treasuryIdStr || !treasuryKeyStr) return res.status(500).json({ error: 'Server not configured for custodial' })
     const sdk = await import('@hashgraph/sdk')
-    const { Client, AccountId, PrivateKey, TokenId, TokenAssociateTransaction, Hbar, AccountCreateTransaction } = sdk as any
+    const { Client, AccountId, PrivateKey, TokenId, TokenAssociateTransaction } = sdk as any
     const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
     const treSrc = String(treasuryKeyStr || '')
     const treasuryId = AccountId.fromString(treasuryIdStr)
     const treasuryKey = PrivateKey.fromStringECDSA(treSrc)
     client.setOperator(treasuryId, treasuryKey)
 
-    let cw = await db.getCustodialWalletByUserId(parsed.data.userId)
-    if (!cw) {
-      const accountKey = PrivateKey.generateECDSA()
-      const pub = accountKey.publicKey
-      const txCreate = new AccountCreateTransaction()
-        .setKey(pub)
-        .setInitialBalance(new Hbar(1))
-      const submitCreate = await txCreate.execute(client)
-      const receiptCreate = await submitCreate.getReceipt(client)
-      const newAccountId = receiptCreate.accountId?.toString()
-      if (!newAccountId) return res.status(500).json({ error: 'Account creation failed' })
-      cw = await db.upsertCustodialWallet({ user_id: parsed.data.userId, email: parsed.data.email, provider: parsed.data.provider || 'google', account_id: newAccountId, private_key: `0x${accountKey.toStringRaw()}`, public_key: `0x${pub.toStringRaw()}` })
-    }
+    const cw = await db.getCustodialWalletByUserId(parsed.data.userId)
+    if (!cw) return res.status(404).json({ error: 'Custodial wallet not found' })
+    if (!cw.account_id || !cw.private_key) return res.status(400).json({ error: 'Custodial wallet missing key or account' })
 
     const accountId = AccountId.fromString(String(cw.account_id))
     const tokenId = TokenId.fromString(tokenIdStr)
@@ -224,6 +214,7 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
     const { accountId, knowledgePackIds, listingIds } = parsed.data
+    console.log('[x402/chat] request', { accountId, owned: knowledgePackIds, rented: listingIds })
     const contents: string[] = []
     for (const kpId of (knowledgePackIds || [])) {
       const kp = await db.getKnowledgePack(kpId)
@@ -244,6 +235,69 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
       }
       contents.push(kp.content)
     }
+    // X402: charge per-chat using COK token on Hedera testnet
+    try {
+      const charges: Record<string, number> = {}
+      const txIds: string[] = []
+      for (const lid of (listingIds || [])) {
+        const listing = await db.getMarketplaceListing(lid)
+        if (!listing) continue
+        const owner = String(listing.owner_account_id)
+        const isOwner = owner === String(accountId)
+        const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
+        if (!isOwner && perUse > 0) {
+          charges[owner] = (charges[owner] || 0) + perUse
+        }
+      }
+      const totalCharge = Object.values(charges).reduce((a, b) => a + b, 0)
+      console.log('[x402/chat] charges', { charges, totalCharge })
+      if (totalCharge > 0) {
+        const cw = await db.getCustodialWalletByAccountId(accountId)
+        if (!cw || !cw.private_key) {
+          console.warn('[x402/chat] no custodial wallet/private key for account', { accountId })
+          return res.status(402).json({ error: 'Payment required: wallet not found', code: 'X402', amount: totalCharge })
+        }
+        const sdk = await import('@hashgraph/sdk')
+        const { Client, AccountId, PrivateKey, TokenId, TransferTransaction } = sdk as any
+        const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+        const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
+        const tokenIdStr = process.env.COK_TOKEN_ID || '0.0.7284519'
+        const tokenId = TokenId.fromString(tokenIdStr)
+        const payerId = AccountId.fromString(accountId)
+        const privSrc = String(cw.private_key || '')
+        const privHex = privSrc.startsWith('0x') ? privSrc.slice(2) : privSrc
+        const payerKey = PrivateKey.fromStringECDSA(privHex)
+        client.setOperator(payerId, payerKey)
+        for (const [ownerId, amt] of Object.entries(charges)) {
+          try {
+            const ownerAcc = AccountId.fromString(ownerId)
+            console.log('[x402/chat] transfer attempt', { from: payerId.toString(), to: ownerId, amount: amt, tokenId: tokenIdStr, network })
+            const txUnsigned = new TransferTransaction()
+              .addTokenTransfer(tokenId, payerId, -amt)
+              .addTokenTransfer(tokenId, ownerAcc, amt)
+              .freezeWith(client)
+            const tx = await txUnsigned.sign(payerKey)
+            const submit = await tx.execute(client)
+            const receipt = await submit.getReceipt(client)
+            try { txIds.push(submit.transactionId.toString()) } catch {}
+            if (String(receipt.status) !== 'SUCCESS') {
+              console.warn('[x402/chat] transfer non-success', { to: ownerId, amount: amt, status: String(receipt.status) })
+              return res.status(402).json({ error: `Payment required: ${String(receipt.status)}`, code: 'X402', amount: amt, to: ownerId })
+            }
+            console.log('[x402/chat] transfer success', { to: ownerId, amount: amt, status: String(receipt.status) })
+          } catch (e: any) {
+            const msg = String(e?.message || 'Payment error')
+            console.error('[x402/chat] transfer error', { to: ownerId, amount: amt, error: msg })
+            return res.status(402).json({ error: msg, code: 'X402', amount: amt, to: ownerId })
+          }
+        }
+      ;(req as any)._x402 = { charges, txIds }
+      }
+    } catch (e: any) {
+      const msg = String(e?.message || 'Payment error')
+      console.error('[x402/chat] payment flow error', { error: msg })
+      return res.status(402).json({ error: msg, code: 'X402' })
+    }
     if (!contents.length) return res.status(400).json({ error: 'No sources selected' })
     const system = `You are a strictly scoped assistant. You MUST answer using ONLY the content provided under 'Knowledge'. If the answer is not directly supported by that content, reply exactly: "I don't know based on the provided knowledge." Do not use external information. Do not speculate. Quote or paraphrase only from 'Knowledge'.`
     const agg = contents.join('\n\n---\n')
@@ -253,8 +307,90 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
     if (!reply || reply.trim().length === 0) {
       reply = "I don't know based on the provided knowledge."
     }
+    try {
+      const charges: Record<string, number> = ((req as any)._x402?.charges) || {}
+      const txIds: string[] = ((req as any)._x402?.txIds) || []
+      const totalCharge: number = Object.values(charges as Record<string, number>).reduce((a: number, b: number) => a + b, 0)
+      const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+      await db.createActivityChat({
+        account_id: accountId,
+        question: userLast,
+        answer: reply,
+        owned_ids: knowledgePackIds || [],
+        listing_ids: listingIds || [],
+        charges,
+        total_amount: totalCharge,
+        transaction_ids: txIds,
+        network
+      })
+    } catch {}
     res.json({ reply })
   } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Server error' })
+  }
+})
+
+app.post('/x402/prepare-transfer', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({ accountId: z.string(), listingIds: z.array(z.string()) })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
+    const { accountId, listingIds } = parsed.data
+    console.log('[x402/prepare] request', { accountId, listingIds })
+    const charges: Record<string, number> = {}
+    for (const lid of listingIds) {
+      const listing = await db.getMarketplaceListing(lid)
+      if (!listing) return res.status(404).json({ error: `Listing not found: ${lid}` })
+      const owner = String(listing.owner_account_id)
+      const isOwner = owner === String(accountId)
+      const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
+      if (!isOwner && perUse > 0) {
+        charges[owner] = (charges[owner] || 0) + perUse
+      }
+    }
+    const totalCharge = Object.values(charges).reduce((a, b) => a + b, 0)
+    console.log('[x402/prepare] charges', { charges, totalCharge })
+    if (totalCharge <= 0) return res.json({ ok: true, bytes: null, charges })
+    const sdk = await import('@hashgraph/sdk')
+    const { Client, AccountId, TokenId, TransferTransaction, TransactionId } = sdk as any
+    const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+    const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
+    const tokenIdStr = process.env.COK_TOKEN_ID || '0.0.7284519'
+    const tokenId = TokenId.fromString(tokenIdStr)
+    const payerId = AccountId.fromString(accountId)
+    let tx = new TransferTransaction()
+    for (const [ownerId, amt] of Object.entries(charges)) {
+      const ownerAcc = AccountId.fromString(ownerId)
+      tx = tx.addTokenTransfer(tokenId, payerId, -amt).addTokenTransfer(tokenId, ownerAcc, amt)
+    }
+    tx = tx.setTransactionId(TransactionId.generate(payerId)).freezeWith(client)
+    const bytes = Buffer.from(tx.toBytes()).toString('base64')
+    console.log('[x402/prepare] prepared bytes length', { length: bytes.length })
+    res.json({ ok: true, bytes, charges })
+  } catch (e: any) {
+    console.error('[x402/prepare] error', { error: e?.message })
+    res.status(500).json({ error: e?.message || 'Server error' })
+  }
+})
+
+app.post('/x402/submit-transfer', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({ signedBytes: z.string() })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
+    const sdk = await import('@hashgraph/sdk')
+    const { Client, TransferTransaction } = sdk as any
+    const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+    const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
+    const bytes = Buffer.from(parsed.data.signedBytes, 'base64')
+    console.log('[x402/submit] bytes length', { length: bytes.length })
+    const tx = TransferTransaction.fromBytes(bytes)
+    const submit = await tx.execute(client)
+    const receipt = await submit.getReceipt(client)
+    console.log('[x402/submit] receipt', { status: String(receipt.status) })
+    res.json({ status: String(receipt.status) })
+  } catch (e: any) {
+    console.error('[x402/submit] error', { error: e?.message })
     res.status(500).json({ error: e?.message || 'Server error' })
   }
 })
@@ -966,6 +1102,17 @@ app.post('/arenas/start', async (req: Request, res: Response) => {
 app.get('/leaderboard', async (req: Request, res: Response) => {
   try {
     const list = await db.listLeaderboardAccounts()
+    res.json(list)
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Server error' })
+  }
+})
+
+app.get('/activities', async (req: Request, res: Response) => {
+  try {
+    const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined
+    if (!accountId) return res.status(400).json({ error: 'Missing accountId' })
+    const list = await db.listActivitiesByAccountId(accountId)
     res.json(list)
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Server error' })

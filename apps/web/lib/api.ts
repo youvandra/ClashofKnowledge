@@ -84,10 +84,44 @@ export async function chatKnowledgePack(knowledgePackId: string, accountId: stri
 }
 
 export async function chatPlayground(accountId: string, ownedIds: string[], listingIds: string[], messages: { role: 'user'|'assistant', content: string }[]) {
+  console.log('chatPlayground request', { accountId, ownedIds, listingIds, messagesCount: messages.length })
   const r = await fetch(`${API_URL}/playground/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ accountId, knowledgePackIds: ownedIds, listingIds, messages })
+  })
+  const text = await r.text()
+  if (!r.ok) {
+    console.warn('chatPlayground non-ok', { status: r.status, body: text })
+    try {
+      const data = JSON.parse(text || '{}')
+      throw new Error(JSON.stringify(data))
+    } catch {
+      if (r.status === 402) {
+        console.warn('chatPlayground 402', { status: 402, body: text })
+        throw new Error(JSON.stringify({ code: 'X402', error: 'Payment required', status: 402 }))
+      }
+      throw new Error(`HTTP ${r.status}`)
+    }
+  }
+  console.log('chatPlayground ok', { status: r.status })
+  try { return JSON.parse(text || '{}') } catch { return {} }
+}
+
+export async function prepareX402Transfer(accountId: string, listingIds: string[]) {
+  const r = await fetch(`${API_URL}/x402/prepare-transfer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountId, listingIds })
+  })
+  return r.json()
+}
+
+export async function submitX402Transfer(signedBytesBase64: string) {
+  const r = await fetch(`${API_URL}/x402/submit-transfer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signedBytes: signedBytesBase64 })
   })
   return r.json()
 }
@@ -392,5 +426,11 @@ export async function updateUserName(accountId: string, name: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ accountId, name })
   })
+  return r.json()
+}
+
+export async function listActivities(accountId: string) {
+  const url = `${API_URL}/activities?accountId=${encodeURIComponent(accountId)}`
+  const r = await fetch(url)
   return r.json()
 }

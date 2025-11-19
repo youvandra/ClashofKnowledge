@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { listKnowledgePacks, listMarketplaceListings, getMarketplaceRentalStatus, chatPlayground, getMarketplaceListing } from '../lib/api'
+import { listKnowledgePacks, listMarketplaceListings, getMarketplaceRentalStatus, chatPlayground, getMarketplaceListing, prepareX402Transfer, submitX402Transfer } from '../lib/api'
 
 export default function Playground() {
   const [accountId, setAccountId] = useState('')
@@ -15,6 +15,7 @@ export default function Playground() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const feedRef = useRef<HTMLDivElement|null>(null)
+  const [paymentNeeded, setPaymentNeeded] = useState<{ amount?: number }|null>(null)
 
   useEffect(() => {
     const acc = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
@@ -128,7 +129,6 @@ export default function Playground() {
     return `Chat with ${names}${more}`
   }, [selTitles])
 
-  const userMessageCount = useMemo(() => messages.filter(m => m.role === 'user').length, [messages])
   const perChatCost = useMemo(() => {
     return selRented.reduce((sum, id) => {
       const meta = listingMeta[id]
@@ -137,20 +137,97 @@ export default function Playground() {
       return sum + Math.max(0, meta.pricePerUse || 0)
     }, 0)
   }, [selRented, listingMeta, accountId])
-  const totalCost = useMemo(() => perChatCost * userMessageCount, [perChatCost, userMessageCount])
 
   async function send() {
     if ((!selOwned.length && !selRented.length) || !input) return
     setSending(true)
     const msgs: { role: 'user'|'assistant', content: string }[] = [...messages, { role: 'user', content: input }]
+    console.log('playground send', { accountId, owned: selOwned, rented: selRented, messagesCount: msgs.length })
     setMessages(msgs)
     setInput('')
     try {
       const out = await chatPlayground(accountId, selOwned, selRented, msgs)
       const reply = String(out?.reply || '')
       setMessages(m => [...m, { role: 'assistant', content: reply }])
-    } catch {}
+    } catch (e: any) {
+      const msg = String(e?.message || 'Payment required')
+      console.warn('playground chat error', { message: msg })
+      let parsed: any = {}
+      try { parsed = JSON.parse(msg) } catch {}
+      if (parsed && parsed.code === 'X402') {
+        const payload = { accountId, selOwned, selRented, perUse: selRented.map(id => ({ id, pricePerUse: listingMeta[id]?.pricePerUse, ownerId: listingMeta[id]?.ownerId })) }
+        console.warn('x402 client 402', { error: parsed, payload })
+        setPaymentNeeded({ amount: parsed.amount })
+        setMessages(m => [...m, { role: 'assistant', content: parsed.error || 'Payment required' }])
+      } else {
+        if (msg.includes('HTTP 402')) {
+          const payload = { accountId, selOwned, selRented, perUse: selRented.map(id => ({ id, pricePerUse: listingMeta[id]?.pricePerUse, ownerId: listingMeta[id]?.ownerId })) }
+          console.warn('x402 client 402 fallback', { payload })
+          setPaymentNeeded({})
+          setMessages(m => [...m, { role: 'assistant', content: 'Payment required' }])
+        } else {
+          setMessages(m => [...m, { role: 'assistant', content: msg }])
+        }
+      }
+    }
     setSending(false)
+  }
+
+  async function payWithWallet() {
+    try {
+      const w: any = typeof window !== 'undefined' ? window : {}
+      const mod: any = await import('hashconnect')
+      const sdk: any = await import('@hashgraph/sdk')
+      const HashConnect = mod.HashConnect || mod.default
+      const LedgerId = sdk.LedgerId || sdk.default?.LedgerId
+      const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID
+      const network = process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet'
+      if (!projectId) throw new Error('Missing NEXT_PUBLIC_WC_PROJECT_ID')
+      const ledger = network === 'mainnet' ? LedgerId.MAINNET : LedgerId.TESTNET
+      const appMetadata = { name: 'Debate Arena AI', description: 'Agent-to-Agent Debate Arena', icons: [], url: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000' }
+      const hc = new HashConnect(ledger, projectId, appMetadata, false)
+      await hc.init()
+      let topic = typeof window !== 'undefined' ? (sessionStorage.getItem('hcTopic') || '') : ''
+      if (topic) {
+        try { await hc.connect(topic) } catch {}
+      }
+      if (!topic) {
+        hc.openPairingModal()
+        await new Promise<void>((resolve) => {
+          hc.pairingEvent.once((data: any) => {
+            const ids: string[] = Array.isArray(data?.accountIds) ? data.accountIds.map(String) : []
+            const accId = ids[ids.length - 1] || ''
+            const tp = data?.topic || ''
+            if (tp) { try { sessionStorage.setItem('hcTopic', tp) } catch {} }
+            if (accId) { try { sessionStorage.setItem('accountId', accId) } catch {} }
+            topic = tp
+            resolve()
+          })
+        })
+        if (topic) {
+          try { await hc.connect(topic) } catch {}
+        }
+      }
+      const accUse = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || accountId || '') : (accountId || '')
+      const out = await prepareX402Transfer(accUse, selRented)
+      console.log('x402 prepare', out)
+      if (!out?.bytes) { setPaymentNeeded(null); return }
+      const bytesB64 = String(out.bytes)
+      const txBytes = Uint8Array.from(atob(bytesB64), c => c.charCodeAt(0))
+      const resp = await hc.sendTransaction(topic, txBytes, true)
+      console.log('x402 signed response', { hasSigned: !!resp?.signedTransaction })
+      const signedB64 = String(resp?.signedTransaction || '')
+      if (!signedB64) throw new Error('Sign failed')
+      const sub = await submitX402Transfer(signedB64)
+      console.log('x402 submit', sub)
+      if (String(sub?.status || '') !== 'SUCCESS') throw new Error(sub?.error || 'Payment not confirmed')
+      setPaymentNeeded(null)
+      await send()
+    } catch (e: any) {
+      const msg = String(e?.message || 'Wallet payment failed')
+      console.warn('x402 wallet error', { message: msg })
+      setMessages(m => [...m, { role: 'assistant', content: msg }])
+    }
   }
 
   return (
@@ -222,7 +299,10 @@ export default function Playground() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-sm text-brand-brown/70">Per chat: {perChatCost} • Total: {totalCost}</div>
+            <div className="text-sm text-brand-brown/70">Per chat: ${perChatCost} COK</div>
+            {paymentNeeded && (
+              <button className="btn-secondary btn-sm" onClick={payWithWallet}>Pay with Wallet</button>
+            )}
             <button className="btn-outline btn-sm" onClick={()=>{ setSelOwned([]); setSelRented([]); setSelTitles([]); setMessages([]) }}>Clear</button>
           </div>
         </div>
