@@ -254,10 +254,9 @@ export default function Profile() {
             )}
             {(!cokLoading && needAssociate) && (
               <div className="mt-2 flex items-center justify-between">
-                <div className="text-xs text-brand-brown/60">Token not associated. Open wallet or regenerate custodial.</div>
+                <div className="text-xs text-brand-brown/60">Token not associated. Please open wallet to associate token 0.0.7284519.</div>
                 <div className="flex items-center gap-2">
-                  <button className="btn-outline btn-sm" onClick={openWallet}>Open Wallet</button>
-                  <button className="btn-secondary btn-sm" onClick={regenerateCustodial}>Regenerate Wallet</button>
+                  <button className="btn-outline btn-sm" onClick={openWallet}>Open</button>
                 </div>
               </div>
             )}

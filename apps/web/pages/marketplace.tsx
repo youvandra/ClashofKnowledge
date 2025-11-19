@@ -78,9 +78,9 @@ export default function Marketplace() {
                 <div className="text-xs text-brand-brown/60">Owner <span className="font-mono">{l.owner_account_id}</span> • {formatDate(l.created_at)}</div>
               </div>
               {canUse[l.id] ? (
-                <button className="btn-primary" onClick={()=>onUse(l)}>Use in Playground</button>
+                <button className="btn-primary" onClick={()=>onUse(l)}>Use</button>
               ) : (
-                <button className="btn-primary" onClick={()=>onRent(l)}>Rent</button>
+                <button className="btn-secondary" onClick={()=>onRent(l)}>Rent</button>
               )}
             </div>
           </div>

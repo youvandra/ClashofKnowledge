@@ -65,7 +65,7 @@ export default function Packs() {
         <>
           <div className="flex items-center justify-between gap-3">
             <input className="input max-w-sm" placeholder="Search title" value={kpQuery} onChange={e=>setKpQuery(e.target.value)} />
-            <button className="btn-primary" onClick={()=> setModal({ type: 'upload' })}>Add Knowledge</button>
+            <button className="btn-secondary" onClick={()=> setModal({ type: 'upload' })}>Add Knowledge</button>
           </div>
 
           <div className="card space-y-3">
@@ -108,18 +108,7 @@ export default function Packs() {
                           const isOwner = String(p.ownerAccountId || '') === acc
                           return isOwner ? (
                             p.listed ? (
-                              <button className="btn-outline btn-sm btn-compact" onClick={async ()=>{
-                                try {
-                                  const accId = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
-                                  const r = await unlistMarketplaceListing(p.id, accId)
-                                  if (r && !r.error) {
-                                    setPacks(prev => prev.map(x => x.id === p.id ? { ...x, listed: false } : x))
-                                    pushToast('success','Unlisted from marketplace')
-                                  } else {
-                                    pushToast('error', r?.error || 'Unlist failed')
-                                  }
-                                } catch (e: any) { pushToast('error', e?.message || 'Unlist failed') }
-                              }}>Unrent</button>
+                              <button className="btn-outline btn-sm btn-compact" onClick={()=>{ setModal({ type: 'unlistConfirm', id: p.id }) }}>Unrent</button>
                             ) : (
                               <button className="btn-primary btn-sm btn-compact" onClick={()=>{ setModal({ type: 'listPack', id: p.id }); setListPrice('0') }}>Rent</button>
                             )
@@ -311,6 +300,28 @@ export default function Packs() {
                       }
                     } catch (e: any) { pushToast('error', e?.message || 'Listing failed') }
                   }}>List</button>
+                </div>
+              </div>
+            )}
+            {modal?.type === 'unlistConfirm' && modal.id && (
+              <div className="space-y-3">
+                <div className="font-semibold">Unrent Knowledge</div>
+                <div className="text-sm text-brand-brown/70">This will remove it from the marketplace so others can no longer rent it.</div>
+                <div className="flex gap-2 justify-end">
+                  <button className="btn-outline" onClick={()=> setModal(null)}>Cancel</button>
+                  <button className="btn-danger" onClick={async ()=>{
+                    try {
+                      const accId = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || '') : ''
+                      const r = await unlistMarketplaceListing(String(modal.id), accId)
+                      if (r && !r.error) {
+                        setPacks(prev => prev.map(x => x.id === modal.id ? { ...x, listed: false } : x))
+                        setModal(null)
+                        pushToast('success','Unlisted from marketplace')
+                      } else {
+                        pushToast('error', r?.error || 'Unlist failed')
+                      }
+                    } catch (e: any) { pushToast('error', e?.message || 'Unlist failed') }
+                  }}>Unrent</button>
                 </div>
               </div>
             )}
