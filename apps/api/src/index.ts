@@ -193,6 +193,23 @@ app.post('/knowledge-packs', async (req: Request, res: Response) => {
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
   const kp = await db.createKnowledgePack(parsed.data.title, parsed.data.content, parsed.data.ownerAccountId)
+  try {
+    const sdk = await import('@hashgraph/sdk')
+    const { Client, AccountId, PrivateKey, TopicId, TopicMessageSubmitTransaction } = sdk as any
+    const hedNet = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+    const topicIdStr = String(process.env.HCS_KNOWLEDGE_TOPIC_ID || '')
+    const operatorIdStr = String(process.env.COK_TREASURY_ACCOUNT_ID || '')
+    const operatorKeyStr = String(process.env.COK_TREASURY_PRIVATE_KEY || '')
+    if (topicIdStr && operatorIdStr && operatorKeyStr) {
+      const client = hedNet === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
+      const operatorId = AccountId.fromString(operatorIdStr)
+      const operatorKey = PrivateKey.fromStringECDSA(operatorKeyStr.startsWith('0x') ? operatorKeyStr.slice(2) : operatorKeyStr)
+      client.setOperator(operatorId, operatorKey)
+      const topicId = TopicId.fromString(topicIdStr)
+      const message = { type: 'knowledge_add', network: hedNet, timestamp: new Date().toISOString(), source: 'packs', knowledgePackId: kp?.id, title: kp?.title, ownerAccountId: kp?.ownerAccountId }
+      await new TopicMessageSubmitTransaction().setTopicId(topicId).setMessage(Buffer.from(JSON.stringify(message))).execute(client)
+    }
+  } catch {}
   res.json(kp)
 })
 
@@ -1289,8 +1306,25 @@ app.post('/arenas/submit-knowledge', async (req: Request, res: Response) => {
     if (a[field]) return res.status(400).json({ error: 'Agent already set' })
     const title = `Arena ${a.id} ${parsed.data.side} knowledge`
     const owningAccount = parsed.data.accountId
-    const kp = await db.createKnowledgePack(title, parsed.data.content, owningAccount)
-    const ag = await db.createAgent(parsed.data.agentName, kp.id, owningAccount, 'challenge')
+  const kp = await db.createKnowledgePack(title, parsed.data.content, owningAccount)
+  const ag = await db.createAgent(parsed.data.agentName, kp.id, owningAccount, 'challenge')
+    try {
+      const sdk = await import('@hashgraph/sdk')
+      const { Client, AccountId, PrivateKey, TopicId, TopicMessageSubmitTransaction } = sdk as any
+      const hedNet = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+      const topicIdStr = String(process.env.HCS_KNOWLEDGE_TOPIC_ID || '')
+      const operatorIdStr = String(process.env.COK_TREASURY_ACCOUNT_ID || '')
+      const operatorKeyStr = String(process.env.COK_TREASURY_PRIVATE_KEY || '')
+      if (topicIdStr && operatorIdStr && operatorKeyStr) {
+        const client = hedNet === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
+        const operatorId = AccountId.fromString(operatorIdStr)
+        const operatorKey = PrivateKey.fromStringECDSA(operatorKeyStr.startsWith('0x') ? operatorKeyStr.slice(2) : operatorKeyStr)
+        client.setOperator(operatorId, operatorKey)
+        const topicId = TopicId.fromString(topicIdStr)
+        const message = { type: 'knowledge_add', network: hedNet, timestamp: new Date().toISOString(), source: 'arena', knowledgePackId: kp?.id, title: kp?.title, ownerAccountId: kp?.ownerAccountId, arenaId: a.id, side: parsed.data.side }
+        await new TopicMessageSubmitTransaction().setTopicId(topicId).setMessage(Buffer.from(JSON.stringify(message))).execute(client)
+      }
+    } catch {}
     const submittedField = isCreator ? 'creator_knowledge_submitted' : 'joiner_knowledge_submitted'
     const statusField = isCreator ? 'creator_writing_status' : 'joiner_writing_status'
     const pausedAtField = isCreator ? 'creator_paused_at' : 'joiner_paused_at'
