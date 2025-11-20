@@ -175,21 +175,33 @@ export default function Playground() {
 
   async function payWithWallet() {
     try {
-      const w: any = typeof window !== 'undefined' ? window : {}
-      const mod: any = await import('hashconnect')
-      const sdk: any = await import('@hashgraph/sdk')
-      const HashConnect = mod.HashConnect || mod.default
-      const LedgerId = sdk.LedgerId || sdk.default?.LedgerId
-      const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID
-      const network = process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet'
-      if (!projectId) throw new Error('Missing NEXT_PUBLIC_WC_PROJECT_ID')
-      const ledger = network === 'mainnet' ? LedgerId.MAINNET : LedgerId.TESTNET
-      const appMetadata = { name: 'Debate Arena AI', description: 'Agent-to-Agent Debate Arena', icons: [], url: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000' }
-      const hc = new HashConnect(ledger, projectId, appMetadata, false)
-      await hc.init()
+      const accUse = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || accountId || '') : (accountId || '')
+      const out = await prepareX402Transfer(accUse, selRented)
+      if (!out?.bytes) { setPaymentNeeded(null); return }
+      const bytesB64 = String(out.bytes)
+
+      async function getHC() {
+        const w: any = typeof window !== 'undefined' ? window : {}
+        const mod: any = await import('hashconnect')
+        const sdk: any = await import('@hashgraph/sdk')
+        const HashConnect = mod.HashConnect || mod.default
+        const LedgerId = sdk.LedgerId || sdk.default?.LedgerId
+        const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID
+        const network = process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet'
+        if (!projectId) throw new Error('Missing NEXT_PUBLIC_WC_PROJECT_ID')
+        const ledger = network === 'mainnet' ? LedgerId.MAINNET : LedgerId.TESTNET
+        const appMetadata = { name: 'Debate Arena AI', description: 'Agent-to-Agent Debate Arena', icons: [], url: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000' }
+        if (w.__hashconnect) return w.__hashconnect
+        const hc = new HashConnect(ledger, projectId, appMetadata, false)
+        await hc.init()
+        w.__hashconnect = hc
+        return hc
+      }
+
+      const hc: any = await getHC()
       let topic = typeof window !== 'undefined' ? (sessionStorage.getItem('hcTopic') || '') : ''
       if (topic) {
-        try { await hc.connect(topic) } catch {}
+        try { await hc.connect(topic) } catch { topic = '' }
       }
       if (!topic) {
         hc.openPairingModal()
@@ -208,24 +220,46 @@ export default function Playground() {
           try { await hc.connect(topic) } catch {}
         }
       }
-      const accUse = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || accountId || '') : (accountId || '')
-      const out = await prepareX402Transfer(accUse, selRented)
-      console.log('x402 prepare', out)
-      if (!out?.bytes) { setPaymentNeeded(null); return }
-      const bytesB64 = String(out.bytes)
+
       const txBytes = Uint8Array.from(atob(bytesB64), c => c.charCodeAt(0))
-      const resp = await hc.sendTransaction(topic, txBytes, true)
-      console.log('x402 signed response', { hasSigned: !!resp?.signedTransaction })
+      let resp: any
+      try {
+        resp = await hc.sendTransaction(topic, txBytes, true)
+      } catch (err: any) {
+        const m = String(err?.message || '')
+        if (m.includes('Signer') && m.includes('session')) {
+          try { sessionStorage.removeItem('hcTopic') } catch {}
+          topic = ''
+          hc.openPairingModal()
+          await new Promise<void>((resolve) => {
+            hc.pairingEvent.once((data: any) => {
+              const ids: string[] = Array.isArray(data?.accountIds) ? data.accountIds.map(String) : []
+              const accId = ids[ids.length - 1] || ''
+              const tp = data?.topic || ''
+              if (tp) { try { sessionStorage.setItem('hcTopic', tp) } catch {} }
+              if (accId) { try { sessionStorage.setItem('accountId', accId) } catch {} }
+              topic = tp
+              resolve()
+            })
+          })
+          if (topic) { try { await hc.connect(topic) } catch {} }
+          resp = await hc.sendTransaction(topic, txBytes, true)
+        } else {
+          throw err
+        }
+      }
+
       const signedB64 = String(resp?.signedTransaction || '')
       if (!signedB64) throw new Error('Sign failed')
-      const sub = await submitX402Transfer(signedB64)
-      console.log('x402 submit', sub)
-      if (String(sub?.status || '') !== 'SUCCESS') throw new Error(sub?.error || 'Payment not confirmed')
+      const paymentPayload = { network: (process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase() === 'mainnet' ? 'hedera-mainnet' : 'hedera-testnet', signedTransaction: signedB64 }
+      const headerB64 = btoa(JSON.stringify(paymentPayload))
+      const msgs: { role: 'user'|'assistant', content: string }[] = [...messages, { role: 'user', content: input }]
+      const out2 = await chatPlayground(accUse, selOwned, selRented, msgs, headerB64)
+      const reply2 = String(out2?.reply || '')
+      setMessages(m => [...m, { role: 'assistant', content: reply2 }])
       setPaymentNeeded(null)
-      await send()
     } catch (e: any) {
       const msg = String(e?.message || 'Wallet payment failed')
-      console.warn('x402 wallet error', { message: msg })
       setMessages(m => [...m, { role: 'assistant', content: msg }])
     }
   }

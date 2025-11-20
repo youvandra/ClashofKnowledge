@@ -83,11 +83,11 @@ export async function chatKnowledgePack(knowledgePackId: string, accountId: stri
   return r.json()
 }
 
-export async function chatPlayground(accountId: string, ownedIds: string[], listingIds: string[], messages: { role: 'user'|'assistant', content: string }[]) {
+export async function chatPlayground(accountId: string, ownedIds: string[], listingIds: string[], messages: { role: 'user'|'assistant', content: string }[], xPaymentHeaderBase64?: string) {
   console.log('chatPlayground request', { accountId, ownedIds, listingIds, messagesCount: messages.length })
   const r = await fetch(`${API_URL}/playground/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: xPaymentHeaderBase64 ? { 'Content-Type': 'application/json', 'X-PAYMENT': xPaymentHeaderBase64 } : { 'Content-Type': 'application/json' },
     body: JSON.stringify({ accountId, knowledgePackIds: ownedIds, listingIds, messages })
   })
   const text = await r.text()
@@ -99,7 +99,7 @@ export async function chatPlayground(accountId: string, ownedIds: string[], list
     } catch {
       if (r.status === 402) {
         console.warn('chatPlayground 402', { status: 402, body: text })
-        throw new Error(JSON.stringify({ code: 'X402', error: 'Payment required', status: 402 }))
+        try { throw new Error(text) } catch { throw new Error(JSON.stringify({ code: 'X402', error: 'Payment required', status: 402 })) }
       }
       throw new Error(`HTTP ${r.status}`)
     }
@@ -117,11 +117,11 @@ export async function prepareX402Transfer(accountId: string, listingIds: string[
   return r.json()
 }
 
-export async function submitX402Transfer(signedBytesBase64: string) {
+export async function submitX402Transfer(signedBytesBase64: string, accountId: string, listingIds: string[]) {
   const r = await fetch(`${API_URL}/x402/submit-transfer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ signedBytes: signedBytesBase64 })
+    body: JSON.stringify({ signedBytes: signedBytesBase64, accountId, listingIds })
   })
   return r.json()
 }

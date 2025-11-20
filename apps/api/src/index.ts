@@ -3,10 +3,12 @@ import express, { Request, Response } from 'express'
 import cors from 'cors'
 import { z } from 'zod'
 import { db, persistenceInfo } from './db'
+import { Client as HederaClient, AccountId as HederaAccountId, Hbar as HederaHbar, TransactionId as HederaTransactionId, TransferTransaction as HederaTransferTransaction, PrivateKey as HederaPrivateKey, TokenId as HederaTokenId, TokenAssociateTransaction as HederaTokenAssociateTransaction, Transaction as HederaTransaction } from '@hashgraph/sdk'
 import { RoundEntry, RoundName } from './types'
 import { generateText } from './services/openai'
 import { judgeDebate, aggregateJudgeScores, judgeConclusion } from './services/judge'
 import { calculateElo } from './services/elo'
+import { paymentMiddleware, type Resource, type SolanaAddress, type HederaAddress } from 'x402-express'
 
 const app = express()
 app.use(cors())
@@ -22,10 +24,6 @@ function systemPrompt(name: string, r: RoundName) {
   if (r === 'answer_crossfire') return `You are ${name}. Use only the provided knowledge. Respond crisply to the opponent's questions in 1–2 concise answers or numbered lines. Provide direct, evidence‑backed replies. Do not include any labels; never write words like "question" or "answer" or any stage names. Output only the content. If absolutely no usable content exists, reply "unknown".`
   return `You are ${name}. Use only the provided knowledge. Give final arguments: summarize and conclude your stance with a strong, compact closing in 1–2 short paragraphs. Tighten logic and deliver the final punch. Do not include any labels or stage names; never write words like "round", "opening", "rebuttal", "crossfire", or "closing". Output only the content. If absolutely no usable content exists, reply "unknown".`
 }
-
-app.get('/health', (req: Request, res: Response) => {
-  res.json({ ok: true, supabase: persistenceInfo.useSupabase })
-})
 
 app.post('/custodial/create', async (req: Request, res: Response) => {
   try {
@@ -235,95 +233,206 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
       }
       contents.push(kp.content)
     }
-    // X402: charge per-chat using COK token on Hedera testnet
-    try {
-      const charges: Record<string, number> = {}
-      const txIds: string[] = []
-      for (const lid of (listingIds || [])) {
-        const listing = await db.getMarketplaceListing(lid)
-        if (!listing) continue
-        const owner = String(listing.owner_account_id)
-        const isOwner = owner === String(accountId)
-        const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
-        if (!isOwner && perUse > 0) {
-          charges[owner] = (charges[owner] || 0) + perUse
-        }
+    // X402 dynamic gate
+    const charges: Record<string, number> = {}
+    for (const lid of (listingIds || [])) {
+      const listing = await db.getMarketplaceListing(lid)
+      if (!listing) continue
+      const owner = String(listing.owner_account_id)
+      const isOwner = owner === String(accountId)
+      const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
+      if (!isOwner && perUse > 0) charges[owner] = (charges[owner] || 0) + perUse
+    }
+    const totalCharge = Object.values(charges).reduce((a, b) => a + b, 0)
+    const paidTxIds: string[] = []
+    if (totalCharge > 0) {
+      const facilitatorUrl = String(process.env.FACILITATOR_URL || '')
+      const payTo = String(process.env.ADDRESS || '')
+      const hedNet = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+      const netName = hedNet === 'mainnet' ? 'hedera-mainnet' : 'hedera-testnet'
+      if (!facilitatorUrl || !payTo) return res.status(500).json({ error: 'Payment config missing' })
+      const requirement = {
+        scheme: 'exact',
+        network: netName,
+        maxAmountRequired: String(totalCharge),
+        resource: 'POST /playground/chat',
+        description: 'Chat payment',
+        mimeType: 'application/json',
+        outputSchema: undefined,
+        payTo,
+        maxTimeoutSeconds: 120,
+        asset: process.env.COK_TOKEN_ID,
+        extra: undefined
       }
-      const totalCharge = Object.values(charges).reduce((a, b) => a + b, 0)
-      console.log('[x402/chat] charges', { charges, totalCharge })
-      if (totalCharge > 0) {
-        const cw = await db.getCustodialWalletByAccountId(accountId)
-        if (!cw || !cw.private_key) {
-          console.warn('[x402/chat] no custodial wallet/private key for account', { accountId })
-          return res.status(402).json({ error: 'Payment required: wallet not found', code: 'X402', amount: totalCharge })
-        }
-        const sdk = await import('@hashgraph/sdk')
-        const { Client, AccountId, PrivateKey, TokenId, TransferTransaction } = sdk as any
-        const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
-        const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
-        const tokenIdStr = process.env.COK_TOKEN_ID || '0.0.7284519'
-        const tokenId = TokenId.fromString(tokenIdStr)
-        const payerId = AccountId.fromString(accountId)
-        const privSrc = String(cw.private_key || '')
-        const privHex = privSrc.startsWith('0x') ? privSrc.slice(2) : privSrc
-        const payerKey = PrivateKey.fromStringECDSA(privHex)
-        client.setOperator(payerId, payerKey)
-        for (const [ownerId, amt] of Object.entries(charges)) {
+      const cw = await db.getCustodialWalletByAccountId(accountId)
+      const privSrc = String(cw?.private_key || '')
+      let pk = privSrc
+      if (!pk) {
+        const user = await db.getUserByAccountId(accountId)
+        const try1 = String((user as any)?.private_key || '')
+        const try2 = String((user as any)?.custodial_private_key || '')
+        const try3 = String((user as any)?.wallet_private_key || '')
+        pk = try1 || try2 || try3 || ''
+      }
+      if (pk) {
+        try {
+          const client = hedNet === 'mainnet' ? HederaClient.forMainnet() : HederaClient.forTestnet()
+          const tokenIdStr = String(process.env.COK_TOKEN_ID || '')
+          const tokenId = HederaTokenId.fromString(tokenIdStr)
+          const tx = new HederaTransferTransaction()
+            .addTokenTransfer(tokenId, HederaAccountId.fromString(accountId), -totalCharge)
+            .addTokenTransfer(tokenId, HederaAccountId.fromString(payTo), totalCharge)
+          tx.setTransactionId(HederaTransactionId.generate(HederaAccountId.fromString(accountId)))
+          tx.freezeWith(client)
+          const hex = pk.startsWith('0x') ? pk.slice(2) : pk
+          const key = HederaPrivateKey.fromStringECDSA(hex)
           try {
-            const ownerAcc = AccountId.fromString(ownerId)
-            console.log('[x402/chat] transfer attempt', { from: payerId.toString(), to: ownerId, amount: amt, tokenId: tokenIdStr, network })
-            const txUnsigned = new TransferTransaction()
-              .addTokenTransfer(tokenId, payerId, -amt)
-              .addTokenTransfer(tokenId, ownerAcc, amt)
+            const assoc = await new HederaTokenAssociateTransaction()
+              .setAccountId(HederaAccountId.fromString(accountId))
+              .setTokenIds([tokenId])
               .freezeWith(client)
-            const tx = await txUnsigned.sign(payerKey)
-            const submit = await tx.execute(client)
-            const receipt = await submit.getReceipt(client)
-            try { txIds.push(submit.transactionId.toString()) } catch {}
-            if (String(receipt.status) !== 'SUCCESS') {
-              console.warn('[x402/chat] transfer non-success', { to: ownerId, amount: amt, status: String(receipt.status) })
-              return res.status(402).json({ error: `Payment required: ${String(receipt.status)}`, code: 'X402', amount: amt, to: ownerId })
+              .sign(key)
+            const submitAssoc = await assoc.execute(client)
+            await submitAssoc.getReceipt(client)
+          } catch {}
+          const signed = await tx.sign(key)
+          const submit = await signed.execute(client)
+          const receipt = await submit.getReceipt(client)
+          if (String(receipt.status) !== 'SUCCESS') {
+            return res.status(402).json({ error: `Payment failed: ${String(receipt.status)}` })
+          }
+          paidTxIds.push(submit.transactionId.toString())
+        } catch {
+          return res.status(402).json({ code: 'X402', error: 'Payment required', facilitator: facilitatorUrl, paymentRequirements: [requirement] })
+        }
+      } else {
+        const hdr = req.headers['x-payment']
+        let paymentPayload: any
+        if (hdr) {
+          try {
+            const raw = Array.isArray(hdr) ? hdr[0] : String(hdr || '')
+            let jsonStr = ''
+            try { jsonStr = Buffer.from(raw, 'base64').toString('utf8') } catch { jsonStr = '' }
+            if (jsonStr && jsonStr.trim().startsWith('{')) {
+              paymentPayload = JSON.parse(jsonStr)
+            } else {
+              paymentPayload = JSON.parse(raw)
             }
-            console.log('[x402/chat] transfer success', { to: ownerId, amount: amt, status: String(receipt.status) })
           } catch (e: any) {
-            const msg = String(e?.message || 'Payment error')
-            console.error('[x402/chat] transfer error', { to: ownerId, amount: amt, error: msg })
-            return res.status(402).json({ error: msg, code: 'X402', amount: amt, to: ownerId })
+            try {
+              const client2 = hedNet === 'mainnet' ? HederaClient.forMainnet() : HederaClient.forTestnet()
+              const tokenIdStr2 = String(process.env.COK_TOKEN_ID || '')
+              const tokenId2 = HederaTokenId.fromString(tokenIdStr2)
+              const spenderIdStr = String(process.env.ADDRESS || '')
+              const spenderKeyStr = String(process.env.COK_TREASURY_PRIVATE_KEY || '')
+              const tx2 = new HederaTransferTransaction()
+                .addApprovedTokenTransfer(tokenId2, HederaAccountId.fromString(accountId), -totalCharge)
+                .addTokenTransfer(tokenId2, HederaAccountId.fromString(spenderIdStr), totalCharge)
+              tx2.setTransactionId(HederaTransactionId.generate(HederaAccountId.fromString(spenderIdStr)))
+              tx2.freezeWith(client2)
+              const hex2 = spenderKeyStr.startsWith('0x') ? spenderKeyStr.slice(2) : spenderKeyStr
+              const key2 = HederaPrivateKey.fromStringECDSA(hex2)
+              const signed2 = await tx2.sign(key2)
+              const submit2 = await signed2.execute(client2)
+              const receipt2 = await submit2.getReceipt(client2)
+              if (String(receipt2.status) !== 'SUCCESS') {
+                return res.status(402).json({ code: 'X402', error: 'Payment required', facilitator: facilitatorUrl, paymentRequirements: [requirement] })
+              }
+              paidTxIds.push(submit2.transactionId.toString())
+              paymentPayload = undefined
+            } catch {
+              return res.status(400).json({ error: 'Invalid X-PAYMENT header' })
+            }
+          }
+        } else {
+          const b = (req.body || {}) as any
+          paymentPayload = b?.xPayment || b?.X_PAYMENT || b?.payment || b?.paymentPayload || b?.payload || undefined
+          if (!paymentPayload) {
+            try {
+              const client2 = hedNet === 'mainnet' ? HederaClient.forMainnet() : HederaClient.forTestnet()
+              const tokenIdStr2 = String(process.env.COK_TOKEN_ID || '')
+              const tokenId2 = HederaTokenId.fromString(tokenIdStr2)
+              const spenderIdStr = String(process.env.ADDRESS || '')
+              const spenderKeyStr = String(process.env.COK_TREASURY_PRIVATE_KEY || '')
+              const tx2 = new HederaTransferTransaction()
+                .addApprovedTokenTransfer(tokenId2, HederaAccountId.fromString(accountId), -totalCharge)
+                .addTokenTransfer(tokenId2, HederaAccountId.fromString(spenderIdStr), totalCharge)
+              tx2.setTransactionId(HederaTransactionId.generate(HederaAccountId.fromString(spenderIdStr)))
+              tx2.freezeWith(client2)
+              const hex2 = spenderKeyStr.startsWith('0x') ? spenderKeyStr.slice(2) : spenderKeyStr
+              const key2 = HederaPrivateKey.fromStringECDSA(hex2)
+              const signed2 = await tx2.sign(key2)
+              const submit2 = await signed2.execute(client2)
+              const receipt2 = await submit2.getReceipt(client2)
+              if (String(receipt2.status) !== 'SUCCESS') {
+                return res.status(402).json({ code: 'X402', error: 'Payment required', facilitator: facilitatorUrl, paymentRequirements: [requirement] })
+              }
+              paidTxIds.push(submit2.transactionId.toString())
+            } catch {
+              return res.status(402).json({ code: 'X402', error: 'Payment required', facilitator: facilitatorUrl, paymentRequirements: [requirement] })
+            }
           }
         }
-      ;(req as any)._x402 = { charges, txIds }
+        const signedB64 = String(
+          paymentPayload?.signedTransaction ||
+          paymentPayload?.signedBytes ||
+          paymentPayload?.signed ||
+          (paymentPayload?.paymentPayload ? paymentPayload?.paymentPayload?.signedTransaction : '') ||
+          (paymentPayload?.payload ? paymentPayload?.payload?.signedTransaction : '') ||
+          ''
+        )
+        if (signedB64) {
+          const client = hedNet === 'mainnet' ? HederaClient.forMainnet() : HederaClient.forTestnet()
+          try {
+            const bytes = Buffer.from(signedB64, 'base64')
+            const txn = HederaTransaction.fromBytes(bytes)
+            const submit = await txn.execute(client)
+            const receipt = await submit.getReceipt(client)
+            if (String(receipt.status) !== 'SUCCESS') {
+              return res.status(402).json({ error: `Payment failed: ${String(receipt.status)}` })
+            }
+            paidTxIds.push(submit.transactionId.toString())
+          } catch (e: any) {
+            return res.status(402).json({ error: 'Payment settlement failed' })
+          }
+        }
       }
-    } catch (e: any) {
-      const msg = String(e?.message || 'Payment error')
-      console.error('[x402/chat] payment flow error', { error: msg })
-      return res.status(402).json({ error: msg, code: 'X402' })
     }
     if (!contents.length) return res.status(400).json({ error: 'No sources selected' })
     const system = `You are a strictly scoped assistant. You MUST answer using ONLY the content provided under 'Knowledge'. If the answer is not directly supported by that content, reply exactly: "I don't know based on the provided knowledge." Do not use external information. Do not speculate. Quote or paraphrase only from 'Knowledge'.`
     const agg = contents.join('\n\n---\n')
+    
+
     const userLast = parsed.data.messages.slice().reverse().find(m => m.role === 'user')?.content || ''
     const prompt = `Knowledge:\n${agg}\n---\nInstructions: Answer ONLY with information contained in Knowledge. If insufficient, reply: I don't know based on the provided knowledge.\n---\nUser: ${userLast}`
     let reply = await generateText(system, prompt)
     if (!reply || reply.trim().length === 0) {
       reply = "I don't know based on the provided knowledge."
     }
-    try {
-      const charges: Record<string, number> = ((req as any)._x402?.charges) || {}
-      const txIds: string[] = ((req as any)._x402?.txIds) || []
-      const totalCharge: number = Object.values(charges as Record<string, number>).reduce((a: number, b: number) => a + b, 0)
-      const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+    {
+      const charges2: Record<string, number> = {}
+      for (const lid of (listingIds || [])) {
+        const listing = await db.getMarketplaceListing(lid)
+        if (!listing) continue
+        const owner = String(listing.owner_account_id)
+        const isOwner = owner === String(accountId)
+        const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
+        if (!isOwner && perUse > 0) charges2[owner] = (charges2[owner] || 0) + perUse
+      }
+      const totalCharge2: number = Object.values(charges2).reduce((a, b) => a + b, 0)
+      const network2 = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
       await db.createActivityChat({
         account_id: accountId,
         question: userLast,
         answer: reply,
         owned_ids: knowledgePackIds || [],
         listing_ids: listingIds || [],
-        charges,
-        total_amount: totalCharge,
-        transaction_ids: txIds,
-        network
+        charges: charges2,
+        total_amount: totalCharge2,
+        transaction_ids: paidTxIds,
+        network: network2
       })
-    } catch {}
+    }
     res.json({ reply })
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Server error' })
@@ -332,68 +441,91 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
 
 app.post('/x402/prepare-transfer', async (req: Request, res: Response) => {
   try {
-    const schema = z.object({ accountId: z.string(), listingIds: z.array(z.string()) })
+    const schema = z.object({ accountId: z.string(), listingIds: z.array(z.string()).default([]) })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
     const { accountId, listingIds } = parsed.data
-    console.log('[x402/prepare] request', { accountId, listingIds })
+    const facilitatorUrl = String(process.env.FACILITATOR_URL || '')
+    const payTo = String(process.env.ADDRESS || '')
+    const hedNet = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+    const netName = hedNet === 'mainnet' ? 'hedera-mainnet' : 'hedera-testnet'
+    if (!facilitatorUrl || !payTo) return res.status(500).json({ error: 'Payment config missing' })
     const charges: Record<string, number> = {}
-    for (const lid of listingIds) {
+    for (const lid of (listingIds || [])) {
       const listing = await db.getMarketplaceListing(lid)
-      if (!listing) return res.status(404).json({ error: `Listing not found: ${lid}` })
+      if (!listing) continue
       const owner = String(listing.owner_account_id)
       const isOwner = owner === String(accountId)
       const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
-      if (!isOwner && perUse > 0) {
-        charges[owner] = (charges[owner] || 0) + perUse
-      }
+      if (!isOwner && perUse > 0) charges[owner] = (charges[owner] || 0) + perUse
     }
     const totalCharge = Object.values(charges).reduce((a, b) => a + b, 0)
-    console.log('[x402/prepare] charges', { charges, totalCharge })
-    if (totalCharge <= 0) return res.json({ ok: true, bytes: null, charges })
-    const sdk = await import('@hashgraph/sdk')
-    const { Client, AccountId, TokenId, TransferTransaction, TransactionId } = sdk as any
-    const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
-    const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
-    const tokenIdStr = process.env.COK_TOKEN_ID || '0.0.7284519'
-    const tokenId = TokenId.fromString(tokenIdStr)
-    const payerId = AccountId.fromString(accountId)
-    let tx = new TransferTransaction()
-    for (const [ownerId, amt] of Object.entries(charges)) {
-      const ownerAcc = AccountId.fromString(ownerId)
-      tx = tx.addTokenTransfer(tokenId, payerId, -amt).addTokenTransfer(tokenId, ownerAcc, amt)
-    }
-    tx = tx.setTransactionId(TransactionId.generate(payerId)).freezeWith(client)
-    const bytes = Buffer.from(tx.toBytes()).toString('base64')
-    console.log('[x402/prepare] prepared bytes length', { length: bytes.length })
-    res.json({ ok: true, bytes, charges })
+    if (totalCharge <= 0) return res.json({ ok: false, error: 'No payment required' })
+    const client = hedNet === 'mainnet' ? HederaClient.forMainnet() : HederaClient.forTestnet()
+    const tokenIdStr = String(process.env.COK_TOKEN_ID || '')
+    const tokenId = HederaTokenId.fromString(tokenIdStr)
+    const tx = new HederaTransferTransaction()
+      .addTokenTransfer(tokenId, HederaAccountId.fromString(accountId), -totalCharge)
+      .addTokenTransfer(tokenId, HederaAccountId.fromString(payTo), totalCharge)
+    tx.setTransactionId(HederaTransactionId.generate(HederaAccountId.fromString(accountId)))
+    tx.freezeWith(client)
+    const bytes = tx.toBytes()
+    const b64 = Buffer.from(bytes).toString('base64')
+    res.json({ bytes: b64, network: netName, payTo, amount: totalCharge, asset: tokenIdStr })
   } catch (e: any) {
-    console.error('[x402/prepare] error', { error: e?.message })
     res.status(500).json({ error: e?.message || 'Server error' })
   }
 })
 
 app.post('/x402/submit-transfer', async (req: Request, res: Response) => {
   try {
-    const schema = z.object({ signedBytes: z.string() })
+    const schema = z.object({ signedBytes: z.string(), accountId: z.string(), listingIds: z.array(z.string()).default([]) })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
-    const sdk = await import('@hashgraph/sdk')
-    const { Client, TransferTransaction } = sdk as any
-    const network = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
-    const client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet()
-    const bytes = Buffer.from(parsed.data.signedBytes, 'base64')
-    console.log('[x402/submit] bytes length', { length: bytes.length })
-    const tx = TransferTransaction.fromBytes(bytes)
-    const submit = await tx.execute(client)
-    const receipt = await submit.getReceipt(client)
-    console.log('[x402/submit] receipt', { status: String(receipt.status) })
-    res.json({ status: String(receipt.status) })
+    const { signedBytes, accountId, listingIds } = parsed.data
+    const facilitatorUrl = String(process.env.FACILITATOR_URL || '')
+    const payTo = String(process.env.ADDRESS || '')
+    const hedNet = (process.env.HEDERA_NETWORK || process.env.NEXT_PUBLIC_HASHPACK_NETWORK || 'testnet').toLowerCase()
+    const netName = hedNet === 'mainnet' ? 'hedera-mainnet' : 'hedera-testnet'
+    if (!facilitatorUrl || !payTo) return res.status(500).json({ error: 'Payment config missing' })
+    const charges: Record<string, number> = {}
+    for (const lid of (listingIds || [])) {
+      const listing = await db.getMarketplaceListing(lid)
+      if (!listing) continue
+      const owner = String(listing.owner_account_id)
+      const isOwner = owner === String(accountId)
+      const perUse = Math.max(0, Number((listing as any).price_per_use || 0))
+      if (!isOwner && perUse > 0) charges[owner] = (charges[owner] || 0) + perUse
+    }
+    const totalCharge = Object.values(charges).reduce((a, b) => a + b, 0)
+    if (totalCharge <= 0) return res.json({ ok: true, status: 'NO_PAYMENT' })
+    const requirement = {
+      scheme: 'exact',
+      network: netName,
+      maxAmountRequired: String(totalCharge),
+      resource: 'POST /playground/chat',
+      description: 'Chat payment',
+      mimeType: 'application/json',
+      outputSchema: undefined,
+      payTo,
+      maxTimeoutSeconds: 120,
+      asset: 'hbar',
+      extra: undefined
+    }
+    const paymentPayload = { network: netName, signedTransaction: signedBytes }
+    const base = facilitatorUrl.endsWith('/') ? facilitatorUrl.slice(0, -1) : facilitatorUrl
+    const verifyResp = await fetch(`${base}/verify`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paymentPayload, paymentRequirements: requirement }) })
+    if (!verifyResp.ok) return res.status(402).json({ error: 'Payment verification failed' })
+    const settleResp = await fetch(`${base}/settle`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paymentPayload, paymentRequirements: requirement }) })
+    if (!settleResp.ok) return res.status(402).json({ error: 'Payment settlement failed' })
+    res.json({ ok: true, status: 'SUCCESS' })
   } catch (e: any) {
-    console.error('[x402/submit] error', { error: e?.message })
     res.status(500).json({ error: e?.message || 'Server error' })
   }
 })
+ 
+
+ 
 
 app.get('/marketplace/listings', async (req: Request, res: Response) => {
   const list = await db.listMarketplaceListings()
