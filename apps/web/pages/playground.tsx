@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { listKnowledgePacks, listMarketplaceListings, getMarketplaceRentalStatus, chatPlayground, getMarketplaceListing, prepareX402Transfer, submitX402Transfer, checkX402Allowance, listActivities } from '../lib/api'
+import { listKnowledgePacks, listMarketplaceListings, getMarketplaceRentalStatus, chatPlayground, getMarketplaceListing, prepareX402Transfer, submitX402Transfer, checkX402Allowance, listActivities, isCustodialAccount } from '../lib/api'
 
 export default function Playground() {
   const [accountId, setAccountId] = useState('')
@@ -201,15 +201,20 @@ export default function Playground() {
     if (perChatCost > 0) {
       try {
         const accUse = typeof window !== 'undefined' ? (sessionStorage.getItem('accountId') || accountId || '') : (accountId || '')
-        const check = await checkX402Allowance(accUse, selRented)
-        if (!check?.ok) {
-          const decimals = Number(check?.decimals || 0)
-          const toHuman = (tiny: number) => (decimals > 0 ? (tiny / Math.pow(10, decimals)) : tiny)
-          const required = typeof check?.requiredTiny === 'number' ? toHuman(check.requiredTiny) : (check?.amount || perChatCost)
-          const allowed = typeof check?.allowanceTiny === 'number' ? toHuman(check.allowanceTiny) : 0
-          setPaymentNeeded({ amount: required })
-          setMessages(m => [...m, { role: 'assistant', content: `Insufficient allowance. Required ${required} COK, allowance ${allowed} COK to 0.0.6496404. Pay with wallet or approve allowance.` }])
-          return
+        const cust = await isCustodialAccount(accUse).catch(()=>({ isCustodial: false }))
+        if (cust?.isCustodial) {
+          
+        } else {
+          const check = await checkX402Allowance(accUse, selRented)
+          if (!check?.ok) {
+            const decimals = Number(check?.decimals || 0)
+            const toHuman = (tiny: number) => (decimals > 0 ? (tiny / Math.pow(10, decimals)) : tiny)
+            const required = typeof check?.requiredTiny === 'number' ? toHuman(check.requiredTiny) : (check?.amount || perChatCost)
+            const allowed = typeof check?.allowanceTiny === 'number' ? toHuman(check.allowanceTiny) : 0
+            setPaymentNeeded({ amount: required })
+            setMessages(m => [...m, { role: 'assistant', content: `Insufficient allowance. Required ${required} COK, allowance ${allowed} COK to 0.0.6496404. Pay with wallet or approve allowance.` }])
+            return
+          }
         }
       } catch {}
     }

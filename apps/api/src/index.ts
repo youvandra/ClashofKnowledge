@@ -156,9 +156,35 @@ app.post('/custodial/ensure', async (req: Request, res: Response) => {
     const treasuryKey = PrivateKey.fromStringECDSA(treSrc)
     client.setOperator(treasuryId, treasuryKey)
 
-    const cw = await db.getCustodialWalletByUserId(parsed.data.userId)
-    if (!cw) return res.status(404).json({ error: 'Custodial wallet not found' })
-    if (!cw.account_id || !cw.private_key) return res.status(400).json({ error: 'Custodial wallet missing key or account' })
+    let cw = await db.getCustodialWalletByUserId(parsed.data.userId)
+    if (!cw || !cw.account_id || !cw.private_key) {
+      try {
+        const tokenId = TokenId.fromString(tokenIdStr)
+        const newKey = PrivateKey.generateECDSA()
+        const txCreate = new (sdk as any).AccountCreateTransaction().setKey(newKey.publicKey).setInitialBalance(new (sdk as any).Hbar(1))
+        const submitCreate = await txCreate.execute(client)
+        const receiptCreate = await submitCreate.getReceipt(client)
+        const newAccountId = receiptCreate.accountId?.toString()
+        if (!newAccountId) return res.status(500).json({ error: 'Account creation failed' })
+        const txAssoc = new TokenAssociateTransaction().setAccountId(AccountId.fromString(newAccountId)).setTokenIds([tokenId]).freezeWith(client)
+        const signAssoc = await txAssoc.sign(newKey)
+        const submitAssoc = await signAssoc.execute(client)
+        const receiptAssoc = await submitAssoc.getReceipt(client)
+        if (String(receiptAssoc.status) !== 'SUCCESS' && String(receiptAssoc.status) !== 'TOKEN_ALREADY_ASSOCIATED') {
+          return res.status(500).json({ error: `Association failed: ${String(receiptAssoc.status)}` })
+        }
+        cw = await db.upsertCustodialWallet({
+          user_id: parsed.data.userId,
+          email: parsed.data.email,
+          provider: parsed.data.provider || 'google',
+          account_id: newAccountId,
+          private_key: `0x${newKey.toStringRaw()}`,
+          public_key: `0x${newKey.publicKey.toStringRaw()}`
+        })
+      } catch (err: any) {
+        return res.status(500).json({ error: err?.message || 'Custodial creation failed' })
+      }
+    }
 
     const accountId = AccountId.fromString(String(cw.account_id))
     const tokenId = TokenId.fromString(tokenIdStr)
@@ -183,6 +209,19 @@ app.post('/custodial/ensure', async (req: Request, res: Response) => {
     }
 
     res.json({ accountId: accountId.toString(), associated: true, wallet: cw })
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Server error' })
+  }
+})
+
+app.post('/custodial/check', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({ accountId: z.string() })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
+    const cw = await db.getCustodialWalletByAccountId(parsed.data.accountId)
+    const isCustodial = !!(cw && cw.account_id && cw.private_key)
+    res.json({ isCustodial, wallet: isCustodial ? { account_id: cw.account_id } : undefined })
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Server error' })
   }
@@ -303,6 +342,7 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
       }
       const cw = await db.getCustodialWalletByAccountId(accountId)
       const privSrc = String(cw?.private_key || '')
+      const isCustodial = !!privSrc
       let pk = privSrc
       if (!pk) {
         const user = await db.getUserByAccountId(accountId)
@@ -333,26 +373,21 @@ app.post('/playground/chat', async (req: Request, res: Response) => {
           tx.freezeWith(client)
           const hex = pk.startsWith('0x') ? pk.slice(2) : pk
           const key = HederaPrivateKey.fromStringECDSA(hex)
-          try {
-            const assoc = await new HederaTokenAssociateTransaction()
-              .setAccountId(HederaAccountId.fromString(accountId))
-              .setTokenIds([tokenId])
-              .freezeWith(client)
-              .sign(key)
-            const submitAssoc = await assoc.execute(client)
-            await submitAssoc.getReceipt(client)
-          } catch {}
+          
+          try { client.setOperator(HederaAccountId.fromString(accountId), key) } catch {}
           const signed = await tx.sign(key)
           const submit = await signed.execute(client)
           const receipt = await submit.getReceipt(client)
           if (String(receipt.status) !== 'SUCCESS') {
+            if (isCustodial) return res.status(500).json({ error: `Custodial payment failed: ${String(receipt.status)}` })
             return res.status(402).json({ error: `Payment failed: ${String(receipt.status)}` })
           }
           paidTxIds.push(submit.transactionId.toString())
         } catch {
+          if (isCustodial) return res.status(500).json({ error: 'Custodial payment error' })
           return res.status(402).json({ code: 'X402', error: 'Payment required', facilitator: facilitatorUrl, paymentRequirements: [requirement] })
         }
-      } else {
+      } else if (!isCustodial) {
         const hdr = req.headers['x-payment']
         let paymentPayload: any
         if (hdr) {

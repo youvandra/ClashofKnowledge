@@ -443,3 +443,12 @@ export async function listActivities(accountId: string) {
   const r = await fetch(url)
   return r.json()
 }
+
+export async function isCustodialAccount(accountId: string) {
+  const r = await fetch(`${API_URL}/custodial/check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountId })
+  })
+  return r.json()
+}
